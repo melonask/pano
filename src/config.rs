@@ -364,7 +364,6 @@ pub struct OverrideChains {
     pub assets: bool,
 }
 
-
 /// Mirrors AppConfig.egress structure.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]

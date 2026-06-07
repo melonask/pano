@@ -1,5 +1,3 @@
-
-
 use mockito::{Matcher, Server};
 use pano::config::{ChainConfig, RpcOptions};
 use pano::rpc::RpcClient;

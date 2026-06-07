@@ -125,7 +125,9 @@ fn bcli(rpc_port: u16, args: &[&str]) -> String {
         "-rpcpassword=rpcpass",
     ]);
     cmd.args(args);
-    let output = cmd.output().unwrap_or_else(|_| panic!("bitcoin-cli {:?}", args));
+    let output = cmd
+        .output()
+        .unwrap_or_else(|_| panic!("bitcoin-cli {:?}", args));
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
