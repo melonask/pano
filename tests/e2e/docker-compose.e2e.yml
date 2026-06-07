@@ -1,0 +1,360 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Pano e2e — Docker Compose stack
+# ─────────────────────────────────────────────────────────────────────────────
+# Services: postgres, ladon, pano, app
+#
+# External (non-containerised) local chains are expected on the host:
+#   Anvil (EVM)               → localhost:8545
+#   Solana test validator     → localhost:8899
+#   Bitcoin Core regtest      → localhost:18443
+#
+# Launch:  docker compose -f tests/e2e/docker-compose.e2e.yml up
+# Teardown: docker compose -f tests/e2e/docker-compose.e2e.yml down -v
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:18-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pano
+    volumes:
+      - pgdata:/var/lib/postgresql
+    configs:
+      - source: postgres_init_sql
+        target: /docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pano"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  # ── Ladon (address-pool daemon) ─────────────────────────────────────────
+  ladon:
+    image: ghcr.io/melonask/ladon:latest
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      LADON_MNEMONIC: "${LADON_MNEMONIC:?set LADON_MNEMONIC to a 12-word BIP-39 mnemonic}"
+      DATABASE_URL: "postgres://ladon:ladonpass@postgres:5432/pano"
+      RUST_LOG: "ladon=info"
+    volumes:
+      - ./Config.ladon.toml:/app/Config.toml:ro
+
+  # ── Pano (multi-chain deposit detector) ─────────────────────────────────
+  pano:
+    image: pano:e2e
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PANO_CONFIG: "/etc/pano/Config.toml"
+      SOLANA_GENESIS_HASH: "${SOLANA_GENESIS_HASH:-solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG}"
+      SOLANA_RPC_URL: "${SOLANA_RPC_URL:-http://host.docker.internal:8899}"
+      BTC_RPC_URL: "${BTC_RPC_URL:-http://rpcuser:rpcpass@host.docker.internal:18443}"
+      USDT_CONTRACT: "${USDT_CONTRACT:?set USDT_CONTRACT to the local ERC20 contract address}"
+      USDC_MINT: "${USDC_MINT:?set USDC_MINT to the local SPL token mint address}"
+      ANVIL_START_BLOCK: "${ANVIL_START_BLOCK:-0}"
+      SOLANA_START_BLOCK: "${SOLANA_START_BLOCK:-0}"
+      BTC_START_BLOCK: "${BTC_START_BLOCK:-0}"
+      RUST_LOG: "pano=debug"
+    volumes:
+      - ./Config.pano.local.toml:/etc/pano/Config.toml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3210:3210"
+    healthcheck:
+      test: ["CMD", "pano", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  # ── App (minimal Python API) ────────────────────────────────────────────
+  app:
+    image: python:3.13-alpine
+    restart: "no"
+    working_dir: /app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ladon:
+        condition: service_started
+      pano:
+        condition: service_healthy
+    environment:
+      APP_DB_URL: "postgresql://app:apppass@postgres:5432/pano"
+      APP_HTTP_PORT: "8080"
+      APP_ADDRESS_TTL_SECS: "120"
+      SOLANA_GENESIS_HASH: "${SOLANA_GENESIS_HASH:-solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG}"
+      USDT_CONTRACT: "${USDT_CONTRACT:?set USDT_CONTRACT to the local ERC20 contract address}"
+      USDC_MINT: "${USDC_MINT:?set USDC_MINT to the local SPL token mint address}"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        pip install --quiet --no-cache-dir --break-system-packages fastapi uvicorn asyncpg
+        cat > /tmp/app.py <<'PY'
+        import asyncio, json, os
+        from contextlib import asynccontextmanager
+        import asyncpg
+        from fastapi import FastAPI, HTTPException, status
+        from pydantic import BaseModel
+
+        DB_URL = os.getenv("APP_DB_URL", "postgresql://app:apppass@postgres:5432/pano")
+        HTTP_PORT = int(os.getenv("APP_HTTP_PORT", "8080"))
+        ADDRESS_TTL_SECS = int(os.getenv("APP_ADDRESS_TTL_SECS", "120"))
+
+        db_pool = None
+
+        CHAINS = {
+            "evm":    "evm",
+            "solana": "solana",
+            "btc":    "btc",
+        }
+
+        CAIP2 = {
+            "evm":    "eip155:31337",
+            "solana": os.getenv("SOLANA_GENESIS_HASH", ""),
+            "btc":    "bip122:0f9188f13cb7b2c71f2a335e3a4fc328",
+        }
+
+        ASSETS = {
+            "evm":    [("ETH",  None),
+                       ("USDT", json.dumps({"contract": os.getenv("USDT_CONTRACT", ""), "decimals": 6}))],
+            "solana": [("SOL",  None),
+                       ("USDC", json.dumps({"contract": os.getenv("USDC_MINT", ""), "decimals": 6}))],
+            "btc":    [("BTC",  None)],
+        }
+
+        ADDR_COL = {k: f"{k}_address" for k in CHAINS}
+
+        async def cleanup():
+            while True:
+                try:
+                    async with db_pool.acquire() as conn:
+                        rows = await conn.fetch(
+                            """SELECT evm_address, solana_address, btc_address
+                               FROM app.users
+                               WHERE watching_since IS NOT NULL
+                                 AND watching_since + ($1::int * INTERVAL '1 second') <= NOW()""",
+                            ADDRESS_TTL_SECS,
+                        )
+                        for r in rows:
+                            addrs = [a for a in [r["evm_address"], r["solana_address"], r["btc_address"]] if a]
+                            if addrs:
+                                await conn.execute("DELETE FROM public.watched_addresses WHERE address = ANY($1::text[])", addrs)
+                                print(f"[app] unwatched {len(addrs)} addresses")
+                        if rows:
+                            await conn.execute(
+                                """UPDATE app.users SET watching_since = NULL
+                                   WHERE watching_since IS NOT NULL
+                                     AND watching_since + ($1::int * INTERVAL '1 second') <= NOW()""",
+                                ADDRESS_TTL_SECS,
+                            )
+                except Exception as exc:
+                    print(f"[app] cleanup error: {exc}")
+                await asyncio.sleep(1.0)
+
+        @asynccontextmanager
+        async def lifespan(a):
+            global db_pool
+            db_pool = await asyncpg.create_pool(DB_URL, min_size=1, max_size=5)
+            asyncio.create_task(cleanup())
+            print(f"[app] listening on 0.0.0.0:{HTTP_PORT}")
+            yield
+            await db_pool.close()
+
+        app = FastAPI(title="pano-e2e-app", lifespan=lifespan)
+
+        class RegisterRequest(BaseModel):
+            email: str
+
+        @app.post("/register", status_code=status.HTTP_201_CREATED)
+        async def register(req: RegisterRequest):
+            async with db_pool.acquire() as conn:
+                async with conn.transaction():
+                    if await conn.fetchval("SELECT id FROM app.users WHERE email = $1", req.email):
+                        raise HTTPException(status_code=409, detail="Email already registered")
+
+                    addrs = {}
+                    for key, chain in CHAINS.items():
+                        row = await conn.fetchrow(
+                            "SELECT id, address FROM public.address_pool WHERE chain = $1 AND is_used IS NULL ORDER BY index LIMIT 1 FOR UPDATE SKIP LOCKED",
+                            chain,
+                        )
+                        if row is None:
+                            raise HTTPException(status_code=503, detail=f"No unused {chain} address in pool")
+                        await conn.execute("UPDATE public.address_pool SET is_used = true WHERE id = $1", row["id"])
+                        addrs[key] = row["address"]
+
+                    user = await conn.fetchrow(
+                        f"INSERT INTO app.users (email, evm_address, solana_address, btc_address) VALUES ($1,$2,$3,$4) RETURNING id, email, created_at",
+                        req.email, addrs.get("evm"), addrs.get("solana"), addrs.get("btc"),
+                    )
+                    return {"id": user["id"], "email": user["email"], "created_at": user["created_at"].isoformat(), "addresses": {k: {"address": v, "assets": [s for s, _ in ASSETS[k]]} for k, v in addrs.items()}}
+
+        @app.get("/users/{user_id}")
+        async def get_user(user_id: int):
+            async with db_pool.acquire() as conn:
+                user = await conn.fetchrow("SELECT * FROM app.users WHERE id = $1", user_id)
+                if user is None:
+                    raise HTTPException(status_code=404, detail="User not found")
+
+                await conn.execute("UPDATE app.users SET watching_since = NOW() WHERE id = $1", user_id)
+
+                addresses = {}
+                for key in CHAINS:
+                    addr = user[ADDR_COL[key]]
+                    if addr:
+                        addresses[key] = {"address": addr, "assets": [s for s, _ in ASSETS[key]]}
+                        caip2 = CAIP2[key]
+                        for symbol, asset_cfg in ASSETS[key]:
+                            await conn.execute(
+                                """INSERT INTO public.watched_addresses (address, caip2, symbol, asset_config, chain_config, egress)
+                                   VALUES ($1,$2,$3,$4,NULL,NULL) ON CONFLICT DO NOTHING""",
+                                addr, caip2, symbol, asset_cfg,
+                            )
+
+                user_addrs = [user[ADDR_COL[k]] for k in CHAINS if user[ADDR_COL[k]]]
+                bal_map = {}
+                if user_addrs:
+                    lowered = [a.lower() for a in user_addrs]
+                    rows = await conn.fetch(
+                        "SELECT symbol, SUM(amount::numeric)::text AS balance FROM public.deposit_events WHERE event = 'pano.deposit.confirmed' AND lower(address) = ANY($1::text[]) GROUP BY symbol",
+                        lowered,
+                    )
+                    bal_map = {r["symbol"]: r["balance"] for r in rows}
+
+                all_assets = []
+                for key in CHAINS:
+                    for symbol, _ in ASSETS[key]:
+                        all_assets.append({"asset": symbol, "balance": bal_map.get(symbol, "0")})
+
+                ws = await conn.fetchval("SELECT watching_since FROM app.users WHERE id = $1", user_id)
+                return {
+                    "id": user["id"],
+                    "email": user["email"],
+                    "created_at": user["created_at"].isoformat(),
+                    "addresses": addresses,
+                    "address_ttl_secs": ADDRESS_TTL_SECS,
+                    "watching_since": ws.isoformat() if ws else None,
+                    "balances": all_assets,
+                }
+
+        @app.get("/health")
+        async def health():
+            async with db_pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            return {"status": "ok"}
+
+        if __name__ == "__main__":
+            import uvicorn
+            uvicorn.run(app, host="0.0.0.0", port=HTTP_PORT)
+        PY
+        python /tmp/app.py
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8080/health'', timeout=2).read()" || exit 1',
+        ]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+
+configs:
+  postgres_init_sql:
+    content: |
+      DO $$$$
+      BEGIN
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'ladon') THEN
+              CREATE ROLE ladon WITH LOGIN PASSWORD 'ladonpass';
+          END IF;
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'pano') THEN
+              CREATE ROLE pano  WITH LOGIN PASSWORD 'panopass';
+          END IF;
+          IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app') THEN
+              CREATE ROLE app   WITH LOGIN PASSWORD 'apppass';
+          END IF;
+      END
+      $$$$;
+
+      GRANT USAGE  ON SCHEMA public TO ladon, pano, app;
+      GRANT CREATE ON SCHEMA public TO ladon, pano;
+
+      CREATE TABLE IF NOT EXISTS public.address_pool (
+          id          TEXT PRIMARY KEY,
+          chain       TEXT    NOT NULL,
+          address     TEXT    NOT NULL UNIQUE,
+          path        TEXT    NOT NULL,
+          index       INTEGER NOT NULL,
+          created_at  TEXT    NOT NULL,
+          is_used     BOOLEAN,
+          UNIQUE (chain, index)
+      );
+      ALTER TABLE public.address_pool OWNER TO ladon;
+      GRANT SELECT, INSERT ON public.address_pool TO ladon;
+      GRANT SELECT, UPDATE ON public.address_pool TO app;
+
+      CREATE TABLE IF NOT EXISTS public.watched_addresses (
+          address      TEXT NOT NULL,
+          caip2        TEXT NOT NULL,
+          symbol       TEXT NOT NULL,
+          asset_config TEXT,
+          chain_config TEXT,
+          egress       TEXT,
+          PRIMARY KEY (address, caip2, symbol)
+      );
+      ALTER TABLE public.watched_addresses OWNER TO app;
+      GRANT SELECT                         ON public.watched_addresses TO pano;
+      GRANT SELECT, INSERT, DELETE         ON public.watched_addresses TO app;
+
+      CREATE TABLE IF NOT EXISTS public.deposit_events (
+          event_id        TEXT PRIMARY KEY,
+          event           TEXT    NOT NULL,
+          version         INTEGER NOT NULL,
+          occurred_at     TEXT    NOT NULL,
+          tx_id           TEXT    NOT NULL,
+          caip2           TEXT    NOT NULL,
+          symbol          TEXT    NOT NULL,
+          address         TEXT    NOT NULL,
+          block_number    BIGINT  NOT NULL,
+          log_index       BIGINT  NOT NULL DEFAULT 0,
+          amount          TEXT    NOT NULL,
+          sender          TEXT    NOT NULL,
+          confirmations   INTEGER NOT NULL,
+          timestamp       TEXT    NOT NULL
+      );
+      ALTER TABLE public.deposit_events OWNER TO pano;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_deposit_events_dedup
+          ON public.deposit_events (tx_id, caip2, symbol, address, amount, log_index, block_number, event);
+      GRANT SELECT, INSERT ON public.deposit_events TO pano;
+      GRANT SELECT         ON public.deposit_events TO app;
+
+      CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION app;
+
+      CREATE TABLE IF NOT EXISTS app.users (
+          id              SERIAL PRIMARY KEY,
+          email           TEXT        NOT NULL UNIQUE,
+          created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          evm_address     TEXT,
+          solana_address  TEXT,
+          btc_address     TEXT,
+          watching_since  TIMESTAMPTZ
+      );
+      ALTER TABLE app.users OWNER TO app;

@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Ladon — Address-pool daemon configuration (e2e)
+# ─────────────────────────────────────────────────────────────────────────────
+
+[derive]
+
+# Read the BIP-39 mnemonic from the LADON_MNEMONIC environment variable.
+[derive.secret]
+kind = "env"
+var  = "LADON_MNEMONIC"
+
+# ── Derivation chains ────────────────────────────────────────────────────
+
+[[derive.chains]]
+name    = "evm"
+account = 0
+change  = 0
+start_index = 1
+
+[[derive.chains]]
+name        = "solana"
+account     = 0
+change      = 0
+start_index = 1
+solana_mode = "cold-export"
+
+[[derive.chains]]
+name    = "btc"
+account = 0
+change  = 0
+start_index = 1
+network = "regtest"
+
+# ── Pool daemon ──────────────────────────────────────────────────────────
+
+[pool]
+target        = 5     # enough headroom for each isolated outage scenario
+threshold     = 2     # alert/refill before the pool is exhausted
+batch         = 3     # deterministic MAX(index)+1 continuity after restarts
+interval_secs = 1     # fast local e2e refill cadence
+
+# ── Database — PostgreSQL ────────────────────────────────────────────────
+
+[database.postgres]
+url_env   = "DATABASE_URL"
+pool_size = 3
+
+[database.postgres.table]
+name = "address_pool"
+
+[database.postgres.table.columns]
+id         = "id"
+chain      = "chain"
+address    = "address"
+path       = "path"
+index      = "index"
+is_used    = "is_used"
+created_at = "created_at"

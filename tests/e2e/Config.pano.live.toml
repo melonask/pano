@@ -1,0 +1,122 @@
+# ──────────────────────────────────────────────────────────────────────────
+# Pano — File-based ingress/egress config for live chains
+# ──────────────────────────────────────────────────────────────────────────
+# Polygon Mainnet, Sepolia Testnet, Solana Devnet
+#
+# Run:  pano --config tests/e2e/Config.pano.live.toml
+#
+# Note:
+# 1. NEVER USE `polygon-rpc.com` - IT IS NOT ACTIVE!
+# 2. Deposits sent before Pano start are missed | Start Pano first, then send deposits
+# 3. EVM native coin detection trails ERC-20 | Extend TTL ≥ 120 s; wait 2–3 min
+# 4. `spl-token transfer --from` expects account, not keypair | `solana config set --keypair` first
+# 5. `spl-token transfer` uses decimal units | `1.0` not `1000000`
+# 6. Sepolia `cast send` fails on consecutive calls | `--gas-price 5gwei` on every call
+# 7. BTC wallet not loaded after `bitcoind` restart | Delete dir, `createwallet`, re-mine
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── Polygon Mainnet (eip155:137) ──────────────────────────────────────────
+[[chains]]
+caip2            = "eip155:137"
+confirmed_blocks = 6
+rpc = [
+    "https://rpc.ankr.com/polygon/afbbed6c16c518a252ca00b02d488e4ce457fb930b5f2aff5437a3a5191fb731",
+    "https://polygon-mainnet.infura.io/v3/895440c3ef614d1e835c6b2f114067e8",
+    "https://polygon-mainnet.infura.io/v3/509bcbac52764786a47c41ed3aad7bb6",
+    "https://polygon-mainnet.infura.io/v3/59723a3bf359443abd01f46ffc94ceb7",
+]
+
+[chains.rpc_options]
+scan_interval_secs = 15
+
+[[chains.assets]]
+symbol   = "USDC"
+decimals = 6
+contract = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+
+[[chains.assets]]
+symbol   = "USDT"
+decimals = 6
+contract = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+
+[[chains.assets]]
+symbol   = "POL"
+decimals = 18
+
+# ── Sepolia Testnet (eip155:11155111) ─────────────────────────────────────
+[[chains]]
+caip2            = "eip155:11155111"
+confirmed_blocks = 2
+rpc              = ["https://ethereum-sepolia-rpc.publicnode.com", "https://sepolia.drpc.org"]
+
+[chains.rpc_options]
+scan_interval_secs = 15
+
+[[chains.assets]]
+symbol   = "PYUSD"
+decimals = 6
+contract = "0xCaC524BcA292aaade2DF8A05cC58F0a65B1B3bB9"
+
+[[chains.assets]]
+symbol   = "USDC"
+decimals = 6
+contract = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+
+[[chains.assets]]
+symbol   = "LINK"
+decimals = 18
+contract = "0x779877a7b0d9e8603169ddbd7836e478b4624789"
+
+[[chains.assets]]
+symbol   = "ETH"
+decimals = 18
+
+# ── Solana Devnet ─────────────────────────────────────────────────────────
+# Rate limits: 40 req/10s per RPC, 100 req/10s total per IP
+# Tuned for ~3 req/s with headroom
+[[chains]]
+caip2            = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+confirmed_blocks = 1
+rpc = [
+    "https://solana-devnet.g.alchemy.com/v2/pqmbh7GUUW8TL3-W8zdaHusUATir33ZK",
+    "https://solana-devnet.g.alchemy.com/v2/y1zYW-ovVofq7OzZo0Z6IHenRnyq_Pbd",
+]
+
+[chains.rpc_options]
+max_concurrent       = 8
+delay_ms             = 100
+scan_interval_secs   = 10
+scan_lookback_blocks = 500
+scan_timeout_secs    = 120
+batch_size           = 20
+max_retries          = 2
+retry_base_ms        = 2000
+solana_max_supported_transaction_version = 0
+
+[[chains.assets]]
+symbol   = "PYUSD"
+decimals = 6
+contract = "CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM"
+token_program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+
+[[chains.assets]]
+symbol   = "USDC"
+decimals = 6
+contract = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+
+[[chains.assets]]
+symbol   = "SOL"
+decimals = 9
+
+# ── Ingress (file) ────────────────────────────────────────────────────────
+
+[ingress.file]
+enabled            = true
+path               = "/tmp/watched_addresses.jsonl"
+poll_interval_secs = 30
+
+# ── Egress (file) ─────────────────────────────────────────────────────────
+
+[egress.file]
+enabled = true
+path    = "/tmp/deposit_events.jsonl"

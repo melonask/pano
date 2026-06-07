@@ -1,0 +1,27 @@
+# Build artifacts
+**/target/
+
+# Git
+.git/
+.gitignore
+.githooks/
+.github/
+
+# Editor / OS
+**/.DS_Store
+.agents/
+.opencode/
+
+# Environment files
+**/.env
+*.env
+
+# Docs and assets (not needed at build time)
+*.md
+LICENSE
+logo.svg
+Config.example.toml
+
+# Docker
+Dockerfile
+.dockerignore

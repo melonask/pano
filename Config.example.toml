@@ -1,0 +1,600 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Pano — Multi-chain deposit detector configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment variable substitution: ${VAR_NAME} references are resolved at
+# config load time.  Unset variables cause a load error — they are not
+# replaced with empty strings.
+#
+# Command-line:  pano --config Config.toml
+# Environment:   PANO_CONFIG=Config.toml pano
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Server ───────────────────────────────────────────────────────────────────
+[server]
+# Whether to start the HTTP server (required for HTTP ingress/egress routes).
+# Default: false
+enabled = false
+
+# Bind address.
+# Default: "0.0.0.0"
+bind = "0.0.0.0"
+
+# Listen port.
+# Default: 3210
+port = 3210
+
+# URL prefix for all API routes.
+# Default: "v1"
+prefix = "v1"
+
+# Optional shared API key. When non-empty, all HTTP routes require either
+#   Authorization: Bearer <key>
+#   X-Pano-API-Key: <key>
+# Uses constant-time comparison. Leave empty to disable authentication.
+# Default: ""
+api_key = ""
+
+# Static dashboard directory served via HTTP at /{prefix}/{dashboard}.
+# Default: ""
+dashboard = ""
+
+# When true, export masked config.json and addresses.json into dashboard.
+# This writes observability snapshots only when explicitly enabled.
+# Default: false
+dashboard_export = false
+
+# Seconds to wait for background tasks during graceful shutdown.
+# Default: 1
+shutdown_timeout_secs = 1
+
+# ── Detector ─────────────────────────────────────────────────────────────────
+[detector]
+# Maximum number of recent deposit event keys retained for in-memory
+# deduplication. Set to 0 to disable eviction (unbounded memory growth).
+# Default: 100000
+dedup_window_size = 100000
+
+# Number of async workers used for per-address delivery overrides.
+# Default: 8
+delivery_workers = 8
+
+# Bounded internal queue capacity for per-address delivery overrides.
+# When full, override delivery events are dropped rather than blocking scanning.
+# Default: 4096
+delivery_queue_capacity = 4096
+
+# Bounded command queue capacity between ingress and detector.
+# Default: 256
+command_queue_capacity = 256
+
+# Stale unconfirmed-event eviction threshold is:
+# max(confirmed_blocks * stale_event_eviction_multiplier,
+#     stale_event_eviction_min_blocks).
+# Defaults: 10 and 1000
+stale_event_eviction_multiplier = 10
+stale_event_eviction_min_blocks = 1000
+
+# Maximum asset decimal places accepted by config and runtime watch overrides.
+# Default: 30
+max_decimals = 30
+
+# ── Chains ───────────────────────────────────────────────────────────────────
+# At least one [[chains]] block is required.
+#
+# Each chain is identified by a CAIP-2 ID:
+#   - EVM:      "eip155:1" for Ethereum mainnet
+#   - Bitcoin:  "bip122:000000000019d6689c085ae165831e93"
+#   - Solana:   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+
+# ─── Example: Ethereum mainnet ───────────────────────────────────────────────
+[[chains]]
+# CAIP-2 chain identifier. Required.
+caip2 = "eip155:1"
+
+# Block number to start scanning from.
+# Omit to start from the current tip minus scan_lookback_blocks.
+# Default: none
+# start_block = 19000000
+
+# Block number to stop scanning at.
+# 0 or omit = follow the chain tip indefinitely.
+# Default: none
+# end_block = 0
+
+# Number of blocks after first observation before emitting
+# pano.deposit.confirmed. Must be >= 1. Required.
+confirmed_blocks = 12
+
+# JSON-RPC endpoint URLs in failover order. Supports ${VAR} substitution.
+# At least one required. Example uses a public endpoint so this file can be
+# loaded without setting environment variables; production deployments should
+# use dedicated RPC URLs, for example "https://mainnet.infura.io/v3/${INFURA_KEY}".
+rpc = ["https://eth.llamarpc.com"]
+
+# ─── Per-chain RPC options (all optional, defaults shown) ────────────────
+[chains.rpc_options]
+# Maximum concurrent RPC requests.
+# Default: 10
+max_concurrent = 10
+
+# Fixed delay between RPC calls in milliseconds (rate limiting).
+# Default: 0
+delay_ms = 0
+
+# Block batch size for EVM log queries; block count per cycle for Bitcoin.
+# Default: 200
+batch_size = 200
+
+# EVM only. Query all actively watched ERC-20 contracts in one eth_getLogs
+# request when the RPC supports address-array filters. Disable for local/dev
+# nodes that reject address arrays.
+# Default: true
+evm_log_address_batching = true
+
+# Re-scan this many blocks/slots behind the cursor on each cycle for
+# reorg safety. When start_block is omitted, the first scan starts at
+# current_tip - scan_lookback_blocks; set start_block explicitly for deeper
+# historical backfills. Solana's effective default is 500 slots because slots
+# are much faster than EVM blocks.
+# Default: 50 (EVM/Bitcoin), 500 effective for Solana
+scan_lookback_blocks = 50
+
+# Minimum seconds between scan attempts for this chain.
+# Default: 5
+scan_interval_secs = 5
+
+# Maximum wall-clock seconds allowed for one chain scan attempt. Slow or
+# rate-limited chains time out without blocking other chains from processing
+# ready scan results.
+# Default: 60
+scan_timeout_secs = 60
+
+# EVM only. Maximum native-coin blocks to scan per detector cycle.
+# Default: 100
+max_native_scan_per_cycle = 100
+
+# Per-request RPC HTTP timeout in seconds.
+# Default: 15
+request_timeout_secs = 15
+
+# Number of failover retry rounds across all configured endpoints.
+# Default: 3
+max_retries = 3
+
+# Base delay in milliseconds for exponential RPC retry backoff (doubles each round).
+# Default: 500
+retry_base_ms = 500
+
+# Solana only. maxSupportedTransactionVersion for getTransaction.
+# Default: 0
+solana_max_supported_transaction_version = 0
+
+# Solana scanning strategy: "blocks" (default) or "signatures".
+#   blocks:      Per-slot getBlock with transactionDetails=full. Zero dependency
+#                on RPC signature indexing. One RPC call per slot regardless of
+#                watched address count. Recommended for any non-trivial deployment.
+#   signatures:  Legacy per-address getSignaturesForAddress + getTransaction.
+#                Depends on RPC maintaining an up-to-date signature index, which
+#                can lag significantly on shared/free-tier endpoints.
+# Default: "blocks"
+solana_scan_mode = "blocks"
+
+# ─── Assets on this chain ────────────────────────────────────────────────────
+# Assets define what tokens Pano tracks on this chain.
+# The detector only emits events for assets listed here.
+
+# Native currency (ETH). No contract address = native.
+[[chains.assets]]
+# Asset ticker symbol. Required.
+symbol = "ETH"
+
+# Decimal places for the asset, capped by detector.max_decimals. Required.
+decimals = 18
+
+# Token contract address. Omit for native chain currency.
+# contract = "0x..."
+
+# Minimum deposit amount in the smallest unit (e.g. wei).
+# String of digits, no leading zeros, no decimal point.
+# Deposits below this threshold are silently ignored.
+# Default: none (track all deposits)
+# min_amount = "1000000000000000"
+
+# ERC-20 token (USDC on Ethereum)
+[[chains.assets]]
+symbol = "USDC"
+decimals = 6
+contract = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+# Solana token assets may set token_program to derive associated token
+# accounts. Omit for classic SPL Token; set Token-2022 explicitly when needed.
+# token_program = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+# ─── Example: Bitcoin mainnet ─────────────────────────────────────────────────
+# [[chains]]
+# caip2 = "bip122:000000000019d6689c085ae165831e93"
+# confirmed_blocks = 6
+# rpc = ["http://bitcoin-rpc:8332"]
+#
+# [chains.rpc_options]
+# scan_interval_secs = 15
+# batch_size = 50
+#
+# [[chains.assets]]
+# symbol = "BTC"
+# decimals = 8
+
+# ─── Example: Solana mainnet ──────────────────────────────────────────────────
+# [[chains]]
+# caip2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+# confirmed_blocks = 32
+# rpc = ["https://api.mainnet-beta.solana.com"]
+#
+# [chains.rpc_options]
+# scan_interval_secs = 5
+# batch_size = 200
+# scan_lookback_blocks = 500
+#
+# [[chains.assets]]
+# symbol = "SOL"
+# decimals = 9
+#
+# [[chains.assets]]
+# symbol = "USDC"
+# decimals = 6
+# contract = "<mint address>"
+# Omit token_program to scan both classic SPL Token and Token-2022 associated
+# token accounts. Set explicitly when you know the mint's token program.
+# token_program = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+# ── Override — Controls which WatchSpec fields callers may override ───────────
+[override]
+
+[override.chains]
+# Allow/deny overriding chain parameters (start_block, end_block, confirmed_blocks, assets)
+# NOTE: rpc and rpc_options are NOT overridable per-request
+# Default: false
+assets = false
+
+[override.egress]
+# Explicit whitelist for allowing specific per-address egress destinations
+# Default: all false
+webhook = false
+file    = false
+pg      = false
+sqlite  = false
+queue   = false
+http    = false
+
+# ── Ingress — Address ingest sources (all active simultaneously) ──────────────
+[ingress]
+# Bounded command queue capacity for ingress sources.
+# Default: 4096
+command_queue_capacity = 4096
+
+# ─── Ingress: File ────────────────────────────────────────────────────────────
+[ingress.file]
+# Watch a file for address entries. Format inferred from extension:
+#   .json → JSON array of WatchSpec objects
+#   .jsonl → one JSON WatchSpec per line
+#   .csv → address,chains_json,egress_json columns
+#          No header row; every CSV row is data.
+# Default: false
+enabled = false
+
+# Path to the address file.
+# Default: ""
+path = ""
+
+# How often to check the file for modifications (seconds).
+# Minimum 1 second. Default: 5
+poll_interval_secs = 5
+
+# When true, the file contents replace the entire watched address set on each
+# load (SyncAll command). When false, diffs are computed and only individual
+# Watch/Unwatch commands are sent.
+# Default: true
+authoritative = true
+
+# ─── Ingress: SQLite ──────────────────────────────────────────────────────────
+[ingress.sqlite]
+# Poll a SQLite table for address records.
+# Default: false
+enabled = false
+
+# Path to the SQLite database file.
+# Default: ""
+path = "addresses.db"
+
+# Polling interval in seconds. Set to 0 to load once and exit.
+# Minimum 1 second when polling. Default: 5
+poll_interval_secs = 5
+
+[ingress.sqlite.table]
+# Table name. Must be a valid SQL identifier (≤63 chars, alphanumeric + underscore).
+# Default: "watched_addresses"
+name = "watched_addresses"
+
+[ingress.sqlite.table.columns]
+# Column names for the address record fields.
+# Defaults shown below.
+address = "address"
+caip2 = "caip2"
+symbol = "symbol"
+asset_config = "asset_config"
+chain_config = "chain_config"
+egress = "egress"
+
+# ─── Ingress: PostgreSQL ──────────────────────────────────────────────────────
+[ingress.pg]
+# Poll a PostgreSQL table for address records.
+# Default: false
+enabled = false
+
+# PostgreSQL connection URL. Must start with postgres:// or postgresql://.
+# Default: ""
+url = "postgres://user:pass@localhost/pano"
+
+# Polling interval in seconds. Set to 0 to load once and exit.
+# Minimum 1 second when polling. Default: 5
+poll_interval_secs = 5
+
+[ingress.pg.table]
+# Table name. Must be a valid SQL identifier.
+# Default: "watched_addresses"
+name = "watched_addresses"
+
+[ingress.pg.table.columns]
+# Column names for the address record fields.
+# Defaults shown below.
+address = "address"
+caip2 = "caip2"
+symbol = "symbol"
+asset_config = "asset_config"
+chain_config = "chain_config"
+egress = "egress"
+
+# ─── Ingress: AMQP Queue ──────────────────────────────────────────────────────
+[ingress.queue]
+# Consume Watch/Unwatch messages from an AMQP topic exchange.
+# Default: false
+enabled = false
+
+# AMQP broker URL (amqp:// or amqps://).
+# Credentials in the URL take precedence over username/password fields.
+# Default: ""
+url = "amqp://localhost"
+
+# AMQP username. Only used when the URL has no embedded credentials.
+# Default: ""
+username = "pano"
+
+# AMQP password. Only used when the URL has no embedded credentials.
+# Requires username to be set as well. May use environment substitution,
+# e.g. "${AMQP_PASSWORD}"; unset variables cause config load failure.
+# Default: ""
+password = ""
+
+# Durable topic exchange to consume from.
+# Default: ""
+exchange = "pano.ingress"
+
+# Binding key for Watch messages (WatchSpec JSON payload).
+# Default: ""
+watch_routing_key = "watch"
+
+# Binding key for Unwatch messages ({"address":"..."} JSON payload).
+# Default: ""
+unwatch_routing_key = "unwatch"
+
+# Seconds to wait before reconnecting on connection failure.
+# Default: 5
+reconnect_secs = 5
+
+# AMQP QoS prefetch count for the consumer channel.
+# Default: 100
+qos_prefetch = 100
+
+# Consumer tag identifying this Pano instance.
+# Default: "pano-ingress"
+consumer_tag = "pano-ingress"
+
+# ─── Ingress: HTTP ────────────────────────────────────────────────────────────
+[ingress.http]
+# Enable the HTTP address management REST endpoints.
+# Requires server.enabled = true. Default: false
+enabled = false
+
+# URL path segment under the server prefix for address routes.
+# Final route is /{prefix}/{addresses} (POST) and /{prefix}/{addresses}/{addr} (DELETE).
+# Default: "addresses"
+addresses = "addresses"
+
+# ── Egress — Deposit event delivery (all active simultaneously) ───────────────
+
+# Broadcast channel capacity. The oldest event is dropped if all receivers lag.
+# Minimum 1. Default: 4096
+[egress]
+broadcast_capacity = 4096
+
+# ─── Egress: File ─────────────────────────────────────────────────────────────
+[egress.file]
+# Append deposit events to a file. Format inferred from extension:
+#   .json → full JSON array, atomically rewritten each event
+#   .jsonl → one JSON object per line, appended and flushed
+#   .csv → CSV row per event, appended and flushed
+# Default: false
+enabled = false
+
+# Destination file path.
+# Default: ""
+path = "events.jsonl"
+
+# ─── Egress: SQLite ───────────────────────────────────────────────────────────
+[egress.sqlite]
+# Insert deposit events into a SQLite database.
+# The table is auto-created with schema matching the column names below.
+# A unique deduplication index is also created on (tx_id, caip2, symbol, address,
+# amount, log_index, block_number, event).
+# Default: false
+enabled = false
+
+# Path to the SQLite database file.
+# Default: ""
+path = "events.db"
+
+[egress.sqlite.table]
+# Table name. Must be a valid SQL identifier.
+# Default: "deposit_events"
+name = "deposit_events"
+
+[egress.sqlite.table.columns]
+# Overridable column names. Defaults shown below.
+event_id = "event_id"
+event = "event"
+version = "version"
+occurred_at = "occurred_at"
+tx_id = "tx_id"
+caip2 = "caip2"
+symbol = "symbol"
+address = "address"
+block_number = "block_number"
+log_index = "log_index"
+amount = "amount"
+sender = "sender"
+confirmations = "confirmations"
+timestamp = "timestamp"
+
+# ─── Egress: PostgreSQL ───────────────────────────────────────────────────────
+[egress.pg]
+# Insert deposit events into a PostgreSQL database.
+# Auto-creates the configured table and deduplication index if missing.
+# Uses INSERT ... ON CONFLICT DO NOTHING for idempotency.
+# Default: false
+enabled = false
+
+# PostgreSQL connection URL. Must start with postgres:// or postgresql://.
+# Default: ""
+url = "postgres://user:pass@localhost/pano"
+
+[egress.pg.table]
+# Table name. Must be a valid SQL identifier.
+# Default: "deposit_events"
+name = "deposit_events"
+
+[egress.pg.table.columns]
+# Overridable column names. Defaults shown below.
+event_id = "event_id"
+event = "event"
+version = "version"
+occurred_at = "occurred_at"
+tx_id = "tx_id"
+caip2 = "caip2"
+symbol = "symbol"
+address = "address"
+block_number = "block_number"
+log_index = "log_index"
+amount = "amount"
+sender = "sender"
+confirmations = "confirmations"
+timestamp = "timestamp"
+
+# ─── Egress: AMQP Queue ───────────────────────────────────────────────────────
+[egress.queue]
+# Publish deposit events to an AMQP topic exchange.
+# Events are published with content_type = application/json.
+# Routing key is dynamic based on event type:
+#   pano.deposit.detected  → detected_routing_key
+#   pano.deposit.confirmed → confirmed_routing_key
+# Default: false
+enabled = false
+
+# AMQP broker URL.
+# Default: ""
+url = "amqp://localhost"
+
+# AMQP username (only used if URL has no credentials).
+# Default: ""
+username = "pano"
+
+# AMQP password (only used if URL has no credentials). May use environment
+# substitution, e.g. "${AMQP_PASSWORD}"; unset variables cause load failure.
+# Default: ""
+password = ""
+
+# Durable topic exchange to publish to.
+# Default: ""
+exchange = "pano.deposits"
+
+# Routing key for detected events.
+# Default: "detected"
+detected_routing_key = "detected"
+
+# Routing key for confirmed events.
+# Default: "confirmed"
+confirmed_routing_key = "confirmed"
+
+# Seconds to wait before reconnecting on connection failure.
+# Default: 5
+reconnect_secs = 5
+
+# ─── Egress: Webhook ──────────────────────────────────────────────────────────
+[egress.webhook]
+# POST deposit events to an HTTP endpoint with optional HMAC-SHA256 signing.
+# Retry: on server errors (5xx) and 429, with exponential backoff.
+# Non-retry: other 4xx responses are treated as permanent failure.
+# Default: false
+enabled = false
+
+# Webhook URL (http or https). Required when enabled.
+# Default: ""
+url = "https://hooks.example.com/pano"
+
+# HMAC-SHA256 secret. When set, adds these headers to each POST:
+#   X-Pano-Signature: <hex-encoded HMAC-SHA256 of the JSON body>
+#   X-Pano-Event: <event type string>
+# Leave empty for unsigned delivery. May use environment substitution,
+# e.g. "${WEBHOOK_SECRET}"; unset variables cause config load failure.
+# Default: ""
+secret = ""
+
+# Number of retry rounds after the initial delivery attempt.
+# Default: 3
+max_retries = 3
+
+# Base retry delay in milliseconds (doubled each attempt).
+# Default: 250
+retry_base_ms = 250
+
+# Per-request HTTP timeout in seconds.
+# Default: 30
+timeout_secs = 30
+
+# ─── Egress: HTTP (SSE and WebSocket streams) ─────────────────────────────────
+[egress.http]
+# Enable SSE and/or WebSocket egress routes.
+# Requires server.enabled = true. Default: false
+enabled = false
+
+# URL path segment under the server prefix for the SSE endpoint.
+# Full path: /{prefix}/sse
+# Default: "sse"
+sse = "sse"
+
+# URL path segment under the server prefix for the WebSocket endpoint.
+# Full path: /{prefix}/ws
+# Default: "ws"
+websocket = "ws"
+
+# WebSocket ping interval in seconds. If a pong is not received before the
+# next ping, the connection is closed.
+# Default: 30
+ws_heartbeat_secs = 30
+
+# SSE keepalive interval in seconds.
+# Default: 5
+sse_keepalive_secs = 5
+
+# WebSocket size limits in bytes.
+# Defaults: 65536
+ws_max_message_size = 65536
+ws_max_frame_size = 65536

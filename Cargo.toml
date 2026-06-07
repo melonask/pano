@@ -1,0 +1,79 @@
+[package]
+name = "pano"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "Multi-chain deposit detector — Argos Panoptes sees all"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/melonask/pano"
+keywords = ["blockchain", "bitcoin", "balance", "evm", "solana"]
+categories = ["cryptography::cryptocurrencies"]
+
+[[bin]]
+name = "pano"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.52", features = ["full", "test-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+
+# HTTP client & server
+reqwest = { version = "0.13", features = ["json"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml_edit = { version = "0.25", features = ["serde"] }
+csv = "1"
+lapin = "4.10"
+async-trait = "0.1"
+
+# Data types & crypto
+hex = "0.4"
+rust_decimal = { version = "1.42", features = ["serde"] }
+num-bigint = "0.4"
+hmac = "0.13"
+sha2 = "0.11"
+solana-pubkey = { version = "4.2", features = ["curve25519", "sha2"] }
+
+# Error handling & logging
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Cryptography (constant-time comparison)
+aws-lc-rs = "1"
+
+# Collections
+hashbrown = { version = "0.17", features = ["serde"] }
+indexmap = { version = "2", features = ["serde"] }
+
+# CLI (minimal — startup only)
+clap = { version = "4", features = ["derive", "env"] }
+
+# Identifiers
+ulid = { version = "1.2", features = ["serde"] }
+
+# Database
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "postgres"] }
+
+# Environment & URLs
+dotenvy = "0.15"
+regex-lite = "0.1"
+url = "2"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+mockito = "1.7"
+serial_test = "3"
+tempfile = "3"
+tokio-test = "0.4"
