@@ -275,6 +275,55 @@ async fn e2e_multichain() {
     };
     let sol_caip2 = format!("solana:{genesis_hash}");
     eprintln!("e2e_live: solana       on {sol_url}  caip2={sol_caip2}");
+
+    let sol_payer_key = format!("/tmp/pano-e2e-live-payer-{}", std::process::id());
+    let sol_config = format!("/tmp/pano-e2e-live-solana-config-{}", std::process::id());
+    let keygen_out = StdCommand::new("solana-keygen")
+        .args([
+            "new",
+            "--no-bip39-passphrase",
+            "-o",
+            &sol_payer_key,
+            "--force",
+        ])
+        .output()
+        .expect("solana-keygen payer");
+    if !keygen_out.status.success() {
+        panic!(
+            "solana-keygen payer failed: {}",
+            String::from_utf8_lossy(&keygen_out.stderr)
+        );
+    }
+    let config_out = StdCommand::new("solana")
+        .args([
+            "--config",
+            &sol_config,
+            "config",
+            "set",
+            "--url",
+            &sol_url,
+            "--keypair",
+            &sol_payer_key,
+        ])
+        .output()
+        .expect("solana config payer");
+    if !config_out.status.success() {
+        panic!(
+            "solana config payer failed: {}",
+            String::from_utf8_lossy(&config_out.stderr)
+        );
+    }
+    let airdrop_out = StdCommand::new("solana")
+        .args(["--config", &sol_config, "airdrop", "10"])
+        .output()
+        .expect("solana airdrop payer");
+    if !airdrop_out.status.success() {
+        panic!(
+            "solana airdrop payer failed: {}",
+            String::from_utf8_lossy(&airdrop_out.stderr)
+        );
+    }
+
     // Let SPL Token program deploy settle before creating tokens.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -402,6 +451,8 @@ contract Token {{
     let usdc_mint = {
         let out = StdCommand::new("spl-token")
             .args([
+                "--config",
+                &sol_config,
                 "create-token",
                 "--decimals",
                 "6",
@@ -419,6 +470,7 @@ contract Token {{
             v["keys"]["address"]
                 .as_str()
                 .map(String::from)
+                .or_else(|| v["commandOutput"]["address"].as_str().map(String::from))
                 .or_else(|| v["address"].as_str().map(String::from))
         } else {
             None
@@ -448,12 +500,27 @@ contract Token {{
 
     // Create ATA for default keypair and mint
     let _ = StdCommand::new("spl-token")
-        .args(["create-account", &usdc_mint, "--url", &sol_url])
+        .args([
+            "--config",
+            &sol_config,
+            "create-account",
+            &usdc_mint,
+            "--url",
+            &sol_url,
+        ])
         .output()
         .expect("spl-token create-account default");
     tokio::time::sleep(Duration::from_millis(500)).await;
     let mint_out = StdCommand::new("spl-token")
-        .args(["mint", &usdc_mint, "1000", "--url", &sol_url])
+        .args([
+            "--config",
+            &sol_config,
+            "mint",
+            &usdc_mint,
+            "1000",
+            "--url",
+            &sol_url,
+        ])
         .output()
         .expect("spl-token mint");
     let mint_stdout = String::from_utf8_lossy(&mint_out.stdout);
@@ -482,6 +549,8 @@ contract Token {{
     // Fund recipient with SOL
     let _ = StdCommand::new("solana")
         .args([
+            "--config",
+            &sol_config,
             "transfer",
             &sol_test_pubkey,
             "2",
@@ -639,6 +708,8 @@ contract Token {{
     // Solana: 0.001 SOL -> test pubkey
     let _ = StdCommand::new("solana")
         .args([
+            "--config",
+            &sol_config,
             "transfer",
             &sol_test_pubkey,
             "0.001",
@@ -652,6 +723,8 @@ contract Token {{
     // Solana: 0.001 USDC from default sender -> recipient
     let usdc_xfer = StdCommand::new("spl-token")
         .args([
+            "--config",
+            &sol_config,
             "transfer",
             &usdc_mint,
             "0.001",
