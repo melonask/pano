@@ -1,0 +1,37 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: E2E (live chains)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Foundry (anvil, cast, forge)
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Install Bitcoin Core
+        run: |
+          BTC_VERSION=31.0
+          curl -sSfL "https://bitcoincore.org/bin/bitcoin-core-${BTC_VERSION}/bitcoin-${BTC_VERSION}-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz
+          tar xzf bitcoin.tar.gz
+          echo "$PWD/bitcoin-${BTC_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Run e2e test
+        run: cargo test e2e_multichain -- --ignored --nocapture

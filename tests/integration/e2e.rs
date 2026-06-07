@@ -6,7 +6,6 @@
 // Prerequisites: `anvil`, `solana-test-validator`, `bitcoind`, `bitcoin-cli`
 //                `cast`, `spl-token`, `solana`, `solana-keygen` on PATH.
 /// Run:  cargo test e2e_multichain -- --ignored --nocapture
-
 use pano::config::{
     AppConfig, AssetConfig, ChainConfig, DetectorConfig, EgressConfig, IngressConfig,
     OverrideConfig, RpcOptions, ServerConfig,
@@ -126,7 +125,7 @@ fn bcli(rpc_port: u16, args: &[&str]) -> String {
         "-rpcpassword=rpcpass",
     ]);
     cmd.args(args);
-    let output = cmd.output().expect(&format!("bitcoin-cli {:?}", args));
+    let output = cmd.output().unwrap_or_else(|_| panic!("bitcoin-cli {:?}", args));
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
@@ -146,8 +145,12 @@ async fn e2e_multichain() {
     // ── Cleanup ─────────────────────────────────────────────────────────
     // Kill any leftover chain processes from previous failed runs.
     let _ = StdCommand::new("pkill").args(["-f", "anvil"]).output();
-    let _ = StdCommand::new("pkill").args(["-f", "solana-test-validator"]).output();
-    let _ = StdCommand::new("pkill").args(["-f", "bitcoind.*regtest"]).output();
+    let _ = StdCommand::new("pkill")
+        .args(["-f", "solana-test-validator"])
+        .output();
+    let _ = StdCommand::new("pkill")
+        .args(["-f", "bitcoind.*regtest"])
+        .output();
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let sol_port = rand_port();
@@ -168,10 +171,7 @@ async fn e2e_multichain() {
     // Solana test validator (random port)
     let mut solana_validator = ChildGuard::new(
         StdCommand::new("solana-test-validator")
-            .args([
-                "--reset",
-                &format!("--rpc-port={sol_port}"),
-            ])
+            .args(["--reset", &format!("--rpc-port={sol_port}")])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -213,7 +213,12 @@ async fn e2e_multichain() {
         for line in reader.lines() {
             let line = line.unwrap();
             if line.contains("Listening on") {
-                port = line.rsplit(':').next().unwrap().parse().expect("anvil port");
+                port = line
+                    .rsplit(':')
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .expect("anvil port");
                 break;
             }
         }
@@ -227,15 +232,19 @@ async fn e2e_multichain() {
     for _ in 0..120 {
         let out = StdCommand::new("curl")
             .args([
-                "-s", "-X", "POST", "-H", "Content-Type: application/json",
-                "-d", r#"{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}"#,
+                "-s",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                r#"{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}"#,
                 &sol_url,
             ])
             .output()
             .unwrap();
         if out.status.success() {
-            let body: serde_json::Value =
-                serde_json::from_slice(&out.stdout).unwrap_or_default();
+            let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
             if body.get("result").is_some() {
                 break;
             }
@@ -246,15 +255,20 @@ async fn e2e_multichain() {
     let genesis_hash = {
         let resp = StdCommand::new("curl")
             .args([
-                "-s", "-X", "POST", "-H", "Content-Type: application/json",
-                "-d", r#"{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}"#,
+                "-s",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                r#"{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}"#,
                 &sol_url,
             ])
             .output()
             .unwrap();
         let body_str = String::from_utf8_lossy(&resp.stdout);
         let body: serde_json::Value = serde_json::from_slice(&resp.stdout)
-            .expect(&format!("solana genesis hash parse: {body_str}"));
+            .unwrap_or_else(|_| panic!("solana genesis hash parse: {body_str}"));
         body["result"].as_str().unwrap().to_string()
     };
     let sol_caip2 = format!("solana:{genesis_hash}");
@@ -265,16 +279,21 @@ async fn e2e_multichain() {
     for _ in 0..120 {
         let out = StdCommand::new("curl")
             .args([
-                "-s", "--user", "rpcuser:rpcpass",
-                "-X", "POST", "-H", "Content-Type: application/json",
-                "-d", r#"{"jsonrpc":"1.0","id":1,"method":"getblockchaininfo"}"#,
+                "-s",
+                "--user",
+                "rpcuser:rpcpass",
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                r#"{"jsonrpc":"1.0","id":1,"method":"getblockchaininfo"}"#,
                 &btc_url,
             ])
             .output()
             .unwrap();
         if out.status.success() {
-            let body: serde_json::Value =
-                serde_json::from_slice(&out.stdout).unwrap_or_default();
+            let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
             if body.get("result").is_some() {
                 break;
             }
@@ -298,7 +317,9 @@ async fn e2e_multichain() {
         let _ = std::fs::create_dir_all(&src_dir);
         let token_sol = src_dir.join("Token.sol");
         let mut f = std::fs::File::create(&token_sol).unwrap();
-        writeln!(f, r#"// SPDX-License-Identifier: MIT
+        writeln!(
+            f,
+            r#"// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract Token {{
     string public name; string public symbol; uint8 public immutable decimals;
@@ -313,18 +334,27 @@ contract Token {{
         balanceOf[msg.sender] -= value; balanceOf[to] += value;
         emit Transfer(msg.sender, to, value); return true;
     }}
-}}"#).unwrap();
+}}"#
+        )
+        .unwrap();
 
-        let contract_spec = format!("src/Token.sol:Token");
+        let contract_spec = "src/Token.sol:Token".to_string();
         let out = StdCommand::new("forge")
             .args([
-                "create", &contract_spec,
-                "--root", token_dir.to_str().unwrap(),
-                "--rpc-url", &anvil_url,
+                "create",
+                &contract_spec,
+                "--root",
+                token_dir.to_str().unwrap(),
+                "--rpc-url",
+                &anvil_url,
                 "--private-key",
                 "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
                 "--broadcast",
-                "--constructor-args", "Test USDT", "USDT", "6", "1000000000000",
+                "--constructor-args",
+                "Test USDT",
+                "USDT",
+                "6",
+                "1000000000000",
             ])
             .output()
             .expect("forge create USDT");
@@ -350,10 +380,16 @@ contract Token {{
     // Fund acct1 with USDT from deployer acct0
     let _ = StdCommand::new("cast")
         .args([
-            "send", &usdt_contract, "transfer(address,uint256)",
-            anvil_acct1, "500000000",
-            "--private-key", anvil_pk0,
-            "--rpc-url", &anvil_url, "--legacy",
+            "send",
+            &usdt_contract,
+            "transfer(address,uint256)",
+            anvil_acct1,
+            "500000000",
+            "--private-key",
+            anvil_pk0,
+            "--rpc-url",
+            &anvil_url,
+            "--legacy",
         ])
         .output()
         .expect("cast send USDT fund");
@@ -406,7 +442,14 @@ contract Token {{
     };
     // Fund recipient with SOL
     let _ = StdCommand::new("solana")
-        .args(["transfer", &sol_test_pubkey, "2", "--allow-unfunded-recipient", "--url", &sol_url])
+        .args([
+            "transfer",
+            &sol_test_pubkey,
+            "2",
+            "--allow-unfunded-recipient",
+            "--url",
+            &sol_url,
+        ])
         .output()
         .expect("solana transfer fund");
     eprintln!("e2e_live: sol pubkey (recipient) = {sol_test_pubkey}");
@@ -524,9 +567,15 @@ contract Token {{
     // EVM: 0.001 ETH from acct0 -> acct1
     let _ = StdCommand::new("cast")
         .args([
-            "send", "--private-key", anvil_pk0,
-            "--value", "1000000000000000",
-            anvil_acct1, "--rpc-url", &anvil_url, "--legacy",
+            "send",
+            "--private-key",
+            anvil_pk0,
+            "--value",
+            "1000000000000000",
+            anvil_acct1,
+            "--rpc-url",
+            &anvil_url,
+            "--legacy",
         ])
         .output()
         .expect("cast send ETH");
@@ -534,10 +583,16 @@ contract Token {{
     // EVM: 0.001 USDT from acct1 -> acct0
     let _ = StdCommand::new("cast")
         .args([
-            "send", &usdt_contract, "transfer(address,uint256)",
-            anvil_acct0, "1000",
-            "--private-key", anvil_pk1,
-            "--rpc-url", &anvil_url, "--legacy",
+            "send",
+            &usdt_contract,
+            "transfer(address,uint256)",
+            anvil_acct0,
+            "1000",
+            "--private-key",
+            anvil_pk1,
+            "--rpc-url",
+            &anvil_url,
+            "--legacy",
         ])
         .output()
         .expect("cast send USDT");
@@ -545,8 +600,12 @@ contract Token {{
     // Solana: 0.001 SOL -> test pubkey
     let _ = StdCommand::new("solana")
         .args([
-            "transfer", &sol_test_pubkey, "0.001",
-            "--allow-unfunded-recipient", "--url", &sol_url,
+            "transfer",
+            &sol_test_pubkey,
+            "0.001",
+            "--allow-unfunded-recipient",
+            "--url",
+            &sol_url,
         ])
         .output()
         .expect("solana transfer SOL");
@@ -554,9 +613,14 @@ contract Token {{
     // Solana: 0.001 USDC from default sender -> recipient
     let usdc_xfer = StdCommand::new("spl-token")
         .args([
-            "transfer", &usdc_mint, "0.001", &sol_test_pubkey,
-            "--allow-unfunded-recipient", "--fund-recipient",
-            "--url", &sol_url,
+            "transfer",
+            &usdc_mint,
+            "0.001",
+            &sol_test_pubkey,
+            "--allow-unfunded-recipient",
+            "--fund-recipient",
+            "--url",
+            &sol_url,
         ])
         .output()
         .expect("spl-token transfer USDC");
@@ -585,7 +649,11 @@ contract Token {{
     for ev in &events {
         eprintln!(
             "  {:>12}  {:20}  {:4}  {:42}  {:>15}",
-            &ev.event[13..], ev.data.caip2, ev.data.symbol, ev.data.address, ev.data.amount
+            &ev.event[13..],
+            ev.data.caip2,
+            ev.data.symbol,
+            ev.data.address,
+            ev.data.amount
         );
     }
 
@@ -625,7 +693,11 @@ contract Token {{
 
     // ── 9. Shutdown ─────────────────────────────────────────────────────
 
-    handle.cmd_tx.send(Command::Shutdown).await.expect("shutdown");
+    handle
+        .cmd_tx
+        .send(Command::Shutdown)
+        .await
+        .expect("shutdown");
 
     anvil.kill();
     solana_validator.kill();

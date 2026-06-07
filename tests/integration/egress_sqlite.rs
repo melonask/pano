@@ -2,7 +2,7 @@
 ///
 /// Covers: schema creation, idempotent ensure_schema, insert, dedup via
 /// INSERT OR IGNORE, custom table/column names, and dedup index composition.
-mod common;
+use super::common;
 
 use pano::egress::sqlite::{SqliteEgressColumns, SqliteEgressTable, ensure_schema, insert_event};
 use pano::model::{DepositData, DepositEvent};
@@ -22,12 +22,7 @@ async fn open_pool(path: &str) -> sqlx::SqlitePool {
         .expect("open sqlite pool")
 }
 
-fn mk_event(
-    tx_id: &str,
-    amount: &str,
-    log_index: u64,
-    event_type: &str,
-) -> DepositEvent {
+fn mk_event(tx_id: &str, amount: &str, log_index: u64, event_type: &str) -> DepositEvent {
     let data = DepositData {
         tx_id: tx_id.to_string(),
         caip2: "eip155:1".to_string(),

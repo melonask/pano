@@ -2,7 +2,7 @@
 ///
 /// Covers: JSON/JSONL/CSV writes, append behaviour, internal_egress skip,
 /// concurrent JSON writes, canonical-path lock key, and broadcast lag.
-mod common;
+use super::common;
 
 use pano::egress::file::{FileWriteLocks, write_event_to_path, write_event_to_path_with_locks};
 use pano::model::{DepositData, DepositEvent, EgressOverride, WebhookOverride};

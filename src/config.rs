@@ -356,6 +356,7 @@ pub struct OverrideConfig {
 /// Section present = chain overrides enabled.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+#[derive(Default)]
 pub struct OverrideChains {
     /// When true, callers may modify any field within chain entries
     /// AND supply custom assets. When false, `assets` must not appear.
@@ -363,11 +364,6 @@ pub struct OverrideChains {
     pub assets: bool,
 }
 
-impl Default for OverrideChains {
-    fn default() -> Self {
-        Self { assets: false }
-    }
-}
 
 /// Mirrors AppConfig.egress structure.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

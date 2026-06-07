@@ -1,7 +1,7 @@
 use pano::model::*;
 use pano::shared::format::*;
 
-mod common;
+use super::common;
 
 // ── infer_format ──────────────────────────────────────────────────────────
 

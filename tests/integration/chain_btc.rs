@@ -1,6 +1,4 @@
-mod common;
-
-use common::{BTC_ADDR, btc_chain, targets};
+use super::common::{BTC_ADDR, btc_chain, targets};
 use mockito::{Matcher, Server};
 use pano::chain::ChainScanner;
 use pano::chain::btc::{BtcScanner, btc_to_sats, first_input_address};

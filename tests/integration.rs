@@ -12,6 +12,8 @@ mod config;
 mod delivery;
 #[path = "integration/detector.rs"]
 mod detector;
+#[path = "integration/e2e.rs"]
+mod e2e;
 #[path = "integration/egress_file.rs"]
 mod egress_file;
 #[path = "integration/egress_pg.rs"]
@@ -28,7 +30,5 @@ mod ingress_api;
 mod model;
 #[path = "integration/rpc.rs"]
 mod rpc;
-#[path = "integration/e2e.rs"]
-mod e2e;
 #[path = "integration/util.rs"]
 mod util;

@@ -5,7 +5,7 @@ use pano::shared::amqp::build_amqp_url;
 use pano::shared::util::*;
 use std::time::Duration;
 
-mod common;
+use super::common;
 
 // ── deposit_event_key ─────────────────────────────────────────────────────
 

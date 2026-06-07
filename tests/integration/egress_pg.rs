@@ -7,7 +7,7 @@
 /// When PANO_TEST_PG_URL is set, tests run against a real Postgres database.
 /// Otherwise, tests validate SQL construction helpers and connection-failure
 /// handling — all tests still run and pass without external Postgres.
-mod common;
+use super::common;
 
 use pano::egress::pg::{
     PgEgressColumns, PgEgressTable, build_create_index_sql, build_create_table_sql,
@@ -32,12 +32,7 @@ async fn connect_if_available() -> Option<sqlx::PgPool> {
 }
 
 /// Build a DepositEvent for testing.
-fn mk_event(
-    tx_id: &str,
-    amount: &str,
-    log_index: u64,
-    event_type: &str,
-) -> DepositEvent {
+fn mk_event(tx_id: &str, amount: &str, log_index: u64, event_type: &str) -> DepositEvent {
     let data = DepositData {
         tx_id: tx_id.to_string(),
         caip2: "eip155:1".to_string(),

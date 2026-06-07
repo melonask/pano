@@ -1,9 +1,7 @@
 // ── Detector Loop Integration Tests ───────────────────────────────────────
 // Covers all detector loop test cases.
 // Uses mockito RPC servers and broadcast/channel observation.
-mod common;
-
-use common::{EVM_ADDR, EVM_ADDR_LOWER, EVM_SENDER, sample_data};
+use super::common::{EVM_ADDR, EVM_ADDR_LOWER, EVM_SENDER, sample_data};
 use mockito::{Matcher, Server};
 use pano::config::{
     AppConfig, AssetConfig, ChainConfig, DetectorConfig, EgressConfig, IngressConfig,

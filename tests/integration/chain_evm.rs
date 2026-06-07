@@ -1,6 +1,4 @@
-mod common;
-
-use common::{
+use super::common::{
     ERC20_CONTRACT, EVM_ADDR_LOWER, EVM_SENDER, erc20_targets, evm_chain, targets,
     topic_for_address,
 };

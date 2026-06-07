@@ -3,7 +3,7 @@
 /// Covers: 200 OK delivery, HMAC signature (with/without secret), HMAC
 /// determinism, retry on 5xx, retry on 429, no retry on 4xx, retry on
 /// connection error, exponential backoff, and empty-URL skip.
-mod common;
+use super::common;
 
 use mockito::Matcher;
 use pano::egress::webhook::{

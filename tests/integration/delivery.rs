@@ -3,7 +3,7 @@
 /// Covers: basic routing, per-event override precedence, fan-out,
 /// orphaned event handling, concurrent load, channel isolation, and
 /// URL normalization for connection pool deduplication.
-mod common;
+use super::common;
 
 use pano::delivery::{EgressRouter, normalize_pool_key};
 use pano::model::{

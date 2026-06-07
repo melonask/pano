@@ -1,6 +1,6 @@
 use pano::model::*;
 
-mod common;
+use super::common;
 
 // ── ChainKind::from_caip2 ─────────────────────────────────────────────────
 
