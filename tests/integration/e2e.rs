@@ -275,6 +275,8 @@ async fn e2e_multichain() {
     };
     let sol_caip2 = format!("solana:{genesis_hash}");
     eprintln!("e2e_live: solana       on {sol_url}  caip2={sol_caip2}");
+    // Let SPL Token program deploy settle before creating tokens.
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Bitcoin — poll getblockchaininfo until ready
     let btc_url = format!("http://127.0.0.1:{btc_port}");
@@ -399,16 +401,48 @@ contract Token {{
     // SPL USDC on Solana — use default keypair as sender (simpler)
     let usdc_mint = {
         let out = StdCommand::new("spl-token")
-            .args(["create-token", "--decimals", "6", "--url", &sol_url])
+            .args([
+                "create-token",
+                "--decimals",
+                "6",
+                "--url",
+                &sol_url,
+                "--output",
+                "json",
+            ])
             .output()
             .expect("spl-token create-token");
         let stdout = String::from_utf8_lossy(&out.stdout);
-        stdout
-            .lines()
-            .find(|l| l.starts_with("Creating token"))
-            .and_then(|l| l.split_whitespace().nth(2))
-            .expect("create SPL token")
-            .to_string()
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // Try JSON output first (Solana CLI 1.18+, Agave 2.x).
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&stdout) {
+            v["keys"]["address"]
+                .as_str()
+                .map(String::from)
+                .or_else(|| v["address"].as_str().map(String::from))
+        } else {
+            None
+        }
+        // Fall back to text output (older Solana CLI).
+        .or_else(|| {
+            stdout
+                .lines()
+                .find(|l| l.starts_with("Creating token"))
+                .and_then(|l| l.split_whitespace().nth(2))
+                .map(String::from)
+        })
+        .or_else(|| {
+            stdout
+                .lines()
+                .find(|l| l.starts_with("Address:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .map(String::from)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "create SPL token: could not parse mint address\nstdout: {stdout}\nstderr: {stderr}"
+            )
+        })
     };
     eprintln!("e2e_live: USDC mint    = {usdc_mint}");
 
@@ -424,7 +458,10 @@ contract Token {{
         .expect("spl-token mint");
     let mint_stdout = String::from_utf8_lossy(&mint_out.stdout);
     let mint_stderr = String::from_utf8_lossy(&mint_out.stderr);
-    if !mint_stdout.contains("Minting") && !mint_stdout.contains("Signature") {
+    if !mint_stdout.contains("Minting")
+        && !mint_stdout.contains("Signature")
+        && !mint_stdout.contains("Mint")
+    {
         panic!("SPL mint failed: {mint_stdout} {mint_stderr}");
     }
     eprintln!("e2e_live: minted 1000 USDC to default keypair");
