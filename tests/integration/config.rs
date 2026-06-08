@@ -56,6 +56,14 @@ fn config_load_happy_path() {
 }
 
 #[test]
+fn config_load_unknown_top_level_keys_accepted() {
+    let toml = format!("{}\n[hello]\nworld = true\n", full_config(MINIMAL_CHAIN));
+    let f = write_temp_toml(&toml);
+    let cfg = AppConfig::load(f.path().to_str().unwrap()).unwrap();
+    assert_eq!(cfg.chains.len(), 1);
+}
+
+#[test]
 fn config_load_file_not_found() {
     let err = AppConfig::load("nonexistent_file_12345.toml").unwrap_err();
     let msg = format!("{err:?}");

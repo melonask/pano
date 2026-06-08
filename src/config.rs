@@ -47,7 +47,6 @@ impl_egress_column_refs!(PgEgressColumns);
 
 /// Top-level application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerConfig,
