@@ -251,6 +251,8 @@ impl ChainScanner for EvmScanner {
             }
         }
 
+        events.sort_by_key(|e| (e.data.block_number, e.data.log_index));
+
         Ok(events)
     }
 }
