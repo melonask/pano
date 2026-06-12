@@ -1,8 +1,14 @@
-use crate::detector::{DetectorHandle, resolve_watch_spec_to_watches};
+#[cfg(feature = "server")]
+use crate::detector::DetectorHandle;
+#[cfg(feature = "server")]
 use crate::model::{Command, WatchSpec, normalize_address_key};
+#[cfg(feature = "server")]
 use crate::server::error::{ApiError, ApiResult};
+#[cfg(feature = "server")]
 use axum::Json;
+#[cfg(feature = "server")]
 use axum::extract::{Path, State};
+#[cfg(feature = "server")]
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -27,11 +33,15 @@ fn default_addresses_path() -> String {
     "addresses".to_string()
 }
 
+// ── HTTP handler functions (only compiled with server feature) ────────────
+
+#[cfg(feature = "server")]
 /// Fallback 404 for unknown routes.
 pub async fn not_found() -> ApiError {
     ApiError::new(StatusCode::NOT_FOUND, "not_found", "unknown route")
 }
 
+#[cfg(feature = "server")]
 /// POST /v1/addresses — Add a new address watch.
 ///
 /// Resolves and validates before enqueueing the mutation for the detector loop.
@@ -42,7 +52,7 @@ pub async fn add_address(
     reject_if_authoritative_file_ingress(&handle)?;
 
     // Resolve first so HTTP callers get synchronous validation errors.
-    let resolved = resolve_watch_spec_to_watches(&handle.config, &spec)
+    let resolved = crate::detector::resolve_watch_spec_to_watches(&handle.config, &spec)
         .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "bad_request", e.to_string()))?;
 
     let watched = handle.watched.read().await;
@@ -78,6 +88,7 @@ pub async fn add_address(
     Ok(StatusCode::CREATED)
 }
 
+#[cfg(feature = "server")]
 /// DELETE /v1/addresses/{address} — Remove a watched address (all triads).
 pub async fn remove_address(
     State(handle): State<DetectorHandle>,
@@ -116,6 +127,7 @@ pub async fn remove_address(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[cfg(feature = "server")]
 fn reject_if_authoritative_file_ingress(handle: &DetectorHandle) -> ApiResult<()> {
     if handle.config.ingress.file.enabled && handle.config.ingress.file.authoritative {
         return Err(ApiError::new(

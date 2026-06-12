@@ -1,5 +1,14 @@
+#[cfg(feature = "amqp")]
 use crate::config::QueueEgressConfig;
-use crate::egress::{file, pg, queue, sqlite, webhook};
+use crate::egress::file;
+#[cfg(feature = "postgres")]
+use crate::egress::pg;
+#[cfg(feature = "amqp")]
+use crate::egress::queue;
+#[cfg(feature = "sqlite")]
+use crate::egress::sqlite;
+#[cfg(feature = "webhook")]
+use crate::egress::webhook;
 use crate::model::DepositEvent;
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -46,12 +55,16 @@ pub fn normalize_pool_key(raw_url: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct EgressRouter {
     /// Shared HTTP client for webhook override delivery.
+    #[cfg(feature = "webhook")]
     http: reqwest::Client,
     /// PostgreSQL connection pools keyed by normalized database URL.
+    #[cfg(feature = "postgres")]
     pg_pools: Arc<RwLock<hashbrown::HashMap<String, sqlx::PgPool>>>,
     /// SQLite connection pools keyed by normalized database path.
+    #[cfg(feature = "sqlite")]
     sqlite_pools: Arc<RwLock<hashbrown::HashMap<String, sqlx::SqlitePool>>>,
     /// AMQP connections keyed by normalized `url|exchange`.
+    #[cfg(feature = "amqp")]
     queue_connections: Arc<RwLock<hashbrown::HashMap<String, queue::QueueConnection>>>,
     /// Per-path locks for JSON file egress override writes.
     file_locks: file::FileWriteLocks,
@@ -70,6 +83,10 @@ impl EgressRouter {
     }
 
     pub fn with_http_timeout_secs(timeout_secs: u64) -> Self {
+        #[cfg(not(feature = "webhook"))]
+        let _ = timeout_secs;
+
+        #[cfg(feature = "webhook")]
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
             .build()
@@ -78,9 +95,13 @@ impl EgressRouter {
                 reqwest::Client::new()
             });
         Self {
+            #[cfg(feature = "webhook")]
             http,
+            #[cfg(feature = "postgres")]
             pg_pools: Arc::new(RwLock::new(hashbrown::HashMap::new())),
+            #[cfg(feature = "sqlite")]
             sqlite_pools: Arc::new(RwLock::new(hashbrown::HashMap::new())),
+            #[cfg(feature = "amqp")]
             queue_connections: Arc::new(RwLock::new(hashbrown::HashMap::new())),
             file_locks: file::shared_write_locks(),
         }
@@ -93,22 +114,25 @@ impl EgressRouter {
             return;
         };
 
+        #[cfg(feature = "webhook")]
         if let Some(webhook_override) = &egress.webhook {
             self.route_webhook(webhook_override, event).await;
         }
         if let Some(file_override) = &egress.file {
             self.route_file(file_override, event).await;
         }
+        #[cfg(feature = "sqlite")]
         if let Some(sqlite_override) = &egress.sqlite {
             self.route_sqlite(sqlite_override, event).await;
         }
+        #[cfg(feature = "postgres")]
         if let Some(pg_override) = &egress.pg {
             self.route_pg(pg_override, event).await;
         }
+        #[cfg(feature = "amqp")]
         if let Some(queue_override) = &egress.queue {
             self.route_queue(queue_override, event).await;
         }
-        // http SSE/WS override is not applied per-address — those are server-level.
     }
 
     async fn route_file(&self, file_override: &crate::model::FileOverride, event: &DepositEvent) {
@@ -119,6 +143,7 @@ impl EgressRouter {
         }
     }
 
+    #[cfg(feature = "sqlite")]
     async fn route_sqlite(
         &self,
         sqlite_override: &crate::model::SqliteOverride,
@@ -149,6 +174,7 @@ impl EgressRouter {
         }
     }
 
+    #[cfg(feature = "postgres")]
     async fn route_pg(&self, pg_override: &crate::model::PgOverride, event: &DepositEvent) {
         let pool = self.get_pg_pool(&pg_override.url).await;
         match pool {
@@ -175,6 +201,7 @@ impl EgressRouter {
         }
     }
 
+    #[cfg(feature = "amqp")]
     async fn route_queue(
         &self,
         queue_override: &crate::model::QueueOverride,
@@ -203,6 +230,7 @@ impl EgressRouter {
         }
     }
 
+    #[cfg(feature = "amqp")]
     async fn publish_with_key(
         &self,
         key: &str,
@@ -214,6 +242,7 @@ impl EgressRouter {
         conn.publish(event).await
     }
 
+    #[cfg(feature = "webhook")]
     async fn route_webhook(
         &self,
         webhook_override: &crate::model::WebhookOverride,
@@ -243,6 +272,7 @@ impl EgressRouter {
     }
 
     /// Get or create a PostgreSQL connection pool for the given URL.
+    #[cfg(feature = "postgres")]
     async fn get_pg_pool(&self, raw_url: &str) -> Result<sqlx::PgPool> {
         let key = normalize_pool_key(raw_url);
         {
@@ -261,6 +291,7 @@ impl EgressRouter {
     }
 
     /// Get or create a SQLite connection pool for the given path.
+    #[cfg(feature = "sqlite")]
     async fn get_sqlite_pool(&self, raw_path: &str) -> Result<sqlx::SqlitePool> {
         let key = normalize_pool_key(raw_path);
         {
@@ -279,6 +310,7 @@ impl EgressRouter {
     }
 
     /// Get or create an AMQP queue connection for the given key.
+    #[cfg(feature = "amqp")]
     async fn get_queue_connection(
         &self,
         key: &str,
@@ -311,6 +343,7 @@ impl EgressRouter {
 ///
 /// Uses `SqliteConnectOptions::filename()` to avoid URI-parsing ambiguity
 /// with absolute paths on different platforms.
+#[cfg(feature = "sqlite")]
 async fn open_sqlite_pool_for_router(path: &str) -> Result<sqlx::SqlitePool> {
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(path)

@@ -1,16 +1,21 @@
 # ── Build stage ──────────────────────────────────────────────────────────
-FROM rust:1.96-bookworm AS builder
+ARG RUST_VERSION=1.96
+FROM rust:${RUST_VERSION}-slim-bookworm AS builder
 WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y ca-certificates pkg-config && \
+    rm -rf /var/lib/apt/lists/*
 
 # Cache dependencies separately from source changes.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
-    cargo build --release --locked && \
+    cargo build --release --locked --features full --bin pano && \
     rm -rf src
 
 # Build the real binary.
 COPY src/ src/
-RUN touch src/main.rs && cargo build --release --locked
+RUN touch src/main.rs && cargo build --release --locked --features full --bin pano
 
 # ── Runtime stage ────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -28,6 +33,11 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 pano
 RUN mkdir -p /etc/pano && chown pano:pano /etc/pano
 
 COPY --from=builder /app/target/release/pano /usr/local/bin/pano
+
+LABEL org.opencontainers.image.title="Pano" \
+      org.opencontainers.image.description="Multi-chain deposit detector" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/melonask/pano"
 
 # Default config path; override via --config, PANO_CONFIG env, or mount.
 ENV PANO_CONFIG=/etc/pano/Config.toml

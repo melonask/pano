@@ -1,7 +1,9 @@
+#[cfg(feature = "amqp")]
 use anyhow::Result;
 
 /// Build an AMQP URL with credentials from explicit configuration fields.
 /// Credentials embedded in the URL take precedence over the separate fields.
+#[cfg(feature = "amqp")]
 pub fn build_amqp_url(base_url: &str, username: &str, password: &str) -> Result<String> {
     let mut parsed = url::Url::parse(base_url)?;
     if !parsed.username().is_empty() || parsed.password().is_some() {

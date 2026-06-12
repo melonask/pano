@@ -42,6 +42,7 @@ pub fn start_with_tasks(
         }));
     }
 
+    #[cfg(feature = "sqlite")]
     if config.sqlite.enabled {
         let tx = command_tx.clone();
         let cfg = config.sqlite.clone();
@@ -57,6 +58,7 @@ pub fn start_with_tasks(
         }));
     }
 
+    #[cfg(feature = "postgres")]
     if config.pg.enabled {
         let tx = command_tx.clone();
         let cfg = config.pg.clone();
@@ -72,6 +74,7 @@ pub fn start_with_tasks(
         }));
     }
 
+    #[cfg(feature = "amqp")]
     if config.queue.enabled {
         let tx = command_tx.clone();
         let queue_cfg = config.queue.clone();

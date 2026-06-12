@@ -16,14 +16,18 @@ mod detector;
 mod e2e;
 #[path = "integration/egress_file.rs"]
 mod egress_file;
+#[cfg(feature = "postgres")]
 #[path = "integration/egress_pg.rs"]
 mod egress_pg;
+#[cfg(feature = "sqlite")]
 #[path = "integration/egress_sqlite.rs"]
 mod egress_sqlite;
+#[cfg(feature = "webhook")]
 #[path = "integration/egress_webhook.rs"]
 mod egress_webhook;
 #[path = "integration/format.rs"]
 mod format;
+#[cfg(feature = "server")]
 #[path = "integration/ingress_api.rs"]
 mod ingress_api;
 #[path = "integration/model.rs"]

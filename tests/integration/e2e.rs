@@ -128,6 +128,13 @@ fn bcli(rpc_port: u16, args: &[&str]) -> String {
     let output = cmd
         .output()
         .unwrap_or_else(|_| panic!("bitcoin-cli {:?}", args));
+    assert!(
+        output.status.success(),
+        "bitcoin-cli {:?}\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
@@ -355,8 +362,10 @@ async fn e2e_multichain() {
     }
 
     bcli(btc_port, &["createwallet", "testwallet"]);
-    bcli(btc_port, &["-generate", "101"]);
-    let btc_addr = bcli(btc_port, &["getnewaddress"]);
+    let btc_wallet = "-rpcwallet=testwallet";
+    let btc_miner_addr = bcli(btc_port, &[btc_wallet, "getnewaddress"]);
+    bcli(btc_port, &["generatetoaddress", "101", &btc_miner_addr]);
+    let btc_addr = bcli(btc_port, &[btc_wallet, "getnewaddress"]);
     eprintln!("e2e_live: bitcoin      on {btc_url}  watching {btc_addr}");
 
     // ── 3. Deploy test tokens ───────────────────────────────────────────
@@ -747,8 +756,8 @@ contract Token {{
     eprintln!("e2e_live: USDC transferred");
 
     // Bitcoin: 0.001 BTC -> watched address, then mine
-    let _ = bcli(btc_port, &["sendtoaddress", &btc_addr, "0.001"]);
-    bcli(btc_port, &["-generate", "1"]);
+    let _ = bcli(btc_port, &[btc_wallet, "sendtoaddress", &btc_addr, "0.001"]);
+    bcli(btc_port, &["generatetoaddress", "1", &btc_miner_addr]);
 
     // ── 8. Collect & verify events ──────────────────────────────────────
 

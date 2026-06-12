@@ -2,53 +2,69 @@
 # Ladon — Address-pool daemon configuration (e2e)
 # ─────────────────────────────────────────────────────────────────────────────
 
-[derive]
+version = 1
+
+[chains.eth]
+caip2 = "eip155:31337"
+
+[chains.solana]
+caip2 = "solana:localnet"
+
+[chains.bitcoin]
+caip2 = "bip122:regtest"
+
+[stores.ladon]
+driver = "postgres"
+url = "${DATABASE_URL}"
+max_connections = 3
+
+[ladon]
+store = "ladon"
 
 # Read the BIP-39 mnemonic from the LADON_MNEMONIC environment variable.
-[derive.secret]
+[ladon.derive.secret]
 kind = "env"
 var  = "LADON_MNEMONIC"
 
 # ── Derivation chains ────────────────────────────────────────────────────
 
-[[derive.chains]]
-name    = "evm"
-account = 0
-change  = 0
+[[ladon.derive.chains]]
+name        = "evm"
+chain       = "eth"
+account     = 0
+change      = 0
 start_index = 1
 
-[[derive.chains]]
+[[ladon.derive.chains]]
 name        = "solana"
+chain       = "solana"
 account     = 0
 change      = 0
 start_index = 1
 solana_mode = "cold-export"
 
-[[derive.chains]]
-name    = "btc"
-account = 0
-change  = 0
+[[ladon.derive.chains]]
+name        = "btc"
+chain       = "bitcoin"
+account     = 0
+change      = 0
 start_index = 1
-network = "regtest"
+network     = "regtest"
 
 # ── Pool daemon ──────────────────────────────────────────────────────────
 
-[pool]
+[ladon.pool]
 target        = 5     # enough headroom for each isolated outage scenario
 threshold     = 2     # alert/refill before the pool is exhausted
 batch         = 3     # deterministic MAX(index)+1 continuity after restarts
 interval_secs = 1     # fast local e2e refill cadence
 
-# ── Database — PostgreSQL ────────────────────────────────────────────────
+# ── Database table ───────────────────────────────────────────────────────
 
-[database.postgres]
-url_env   = "DATABASE_URL"
-pool_size = 3
-
-[database.postgres.table]
+[ladon.table]
 name = "address_pool"
 
-[database.postgres.table.columns]
+[ladon.table.columns]
 id         = "id"
 chain      = "chain"
 address    = "address"

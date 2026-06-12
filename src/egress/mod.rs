@@ -50,6 +50,7 @@ pub fn start_with_tasks(config: EgressConfig) -> Result<(EgressHandle, Vec<JoinH
         }));
     }
 
+    #[cfg(feature = "sqlite")]
     if config.sqlite.enabled {
         let mut rx = event_tx.subscribe();
         let cfg = config.sqlite.clone();
@@ -60,6 +61,7 @@ pub fn start_with_tasks(config: EgressConfig) -> Result<(EgressHandle, Vec<JoinH
         }));
     }
 
+    #[cfg(feature = "postgres")]
     if config.pg.enabled {
         let mut rx = event_tx.subscribe();
         let cfg = config.pg.clone();
@@ -70,6 +72,7 @@ pub fn start_with_tasks(config: EgressConfig) -> Result<(EgressHandle, Vec<JoinH
         }));
     }
 
+    #[cfg(feature = "amqp")]
     if config.queue.enabled {
         let mut rx = event_tx.subscribe();
         let queue_cfg = config.queue.clone();
@@ -80,6 +83,7 @@ pub fn start_with_tasks(config: EgressConfig) -> Result<(EgressHandle, Vec<JoinH
         }));
     }
 
+    #[cfg(feature = "webhook")]
     if config.webhook.enabled {
         let mut rx = event_tx.subscribe();
         let webhook_cfg = config.webhook.clone();

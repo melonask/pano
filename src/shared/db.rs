@@ -1,8 +1,12 @@
+#[cfg(feature = "sqlite")]
 use anyhow::{Context, Result};
+#[cfg(feature = "sqlite")]
 use sqlx::SqlitePool;
+#[cfg(feature = "sqlite")]
 use sqlx::sqlite::SqliteConnectOptions;
 
 /// Open a SQLite connection pool with WAL and synchronous=NORMAL pragmas.
+#[cfg(feature = "sqlite")]
 pub async fn open_sqlite_pool(path: &str, max_connections: u32) -> Result<SqlitePool> {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(max_connections)
@@ -27,7 +31,9 @@ pub async fn open_sqlite_pool(path: &str, max_connections: u32) -> Result<Sqlite
 }
 
 /// Connect to a PostgreSQL database, returning a connection pool.
+#[cfg(feature = "postgres")]
 pub async fn connect_pg(url: &str) -> Result<sqlx::PgPool> {
+    use anyhow::Context;
     sqlx::PgPool::connect(url)
         .await
         .with_context(|| format!("failed to connect to postgres at {url}"))

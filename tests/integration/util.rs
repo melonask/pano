@@ -1,6 +1,7 @@
 use pano::config::*;
 use pano::detector::util::*;
 use pano::model::*;
+#[cfg(feature = "amqp")]
 use pano::shared::amqp::build_amqp_url;
 use pano::shared::util::*;
 use std::time::Duration;
@@ -204,18 +205,21 @@ fn is_sensitive_key_false_cases() {
 
 // ── build_amqp_url ────────────────────────────────────────────────────────
 
+#[cfg(feature = "amqp")]
 #[test]
 fn build_amqp_url_credentials_in_url_take_precedence() {
     let result = build_amqp_url("amqp://user:pass@host", "other", "p").unwrap();
     assert_eq!(result, "amqp://user:pass@host");
 }
 
+#[cfg(feature = "amqp")]
 #[test]
 fn build_amqp_url_separate_credentials() {
     let result = build_amqp_url("amqp://host", "u", "p").unwrap();
     assert_eq!(result, "amqp://u:p@host");
 }
 
+#[cfg(feature = "amqp")]
 #[test]
 fn build_amqp_url_password_without_username() {
     let err = build_amqp_url("amqp://host", "", "p").unwrap_err();
@@ -226,6 +230,7 @@ fn build_amqp_url_password_without_username() {
     );
 }
 
+#[cfg(feature = "amqp")]
 #[test]
 fn build_amqp_url_both_empty_unchanged() {
     let result = build_amqp_url("amqp://host", "", "").unwrap();
@@ -238,16 +243,21 @@ fn build_amqp_url_both_empty_unchanged() {
 fn mask_config_rpc_urls_masked() {
     // Build a minimal config with credentials in the RPC URL
     let toml = r#"
-[server]
+[pano]
+chains = ["eth"]
+assets = ["eth"]
+
+[pano.server]
+enabled = false
 port = 3210
-enabled = true
 
-[[chains]]
+[chains.eth]
 caip2 = "eip155:1"
-confirmed_blocks = 12
-rpc = ["https://user:pass@rpc.example.com/secret"]
+rpc_urls = ["https://user:pass@rpc.example.com/secret"]
+confirmations = 12
 
-[[chains.assets]]
+[assets.eth]
+chain = "eth"
 symbol = "ETH"
 decimals = 18
 "#;

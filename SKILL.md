@@ -3,457 +3,374 @@ name: pano
 description: Use when the application needs blockchain deposit detection — tracking user deposits/top-ups on EVM chains, Bitcoin, or Solana. Use for cryptocurrency exchanges, payment gateways, merchant checkout flows, or any service that generates addresses and needs to know when funds arrive. Pano watches addresses across multiple chains and delivers standardized deposit events via files, databases, webhooks, message queues, SSE, or WebSockets.
 ---
 
-# Pano — Multi-chain Deposit Detector
+Pano monitors blockchain addresses across multiple chains (EVM, Bitcoin, Solana) and emits standardised deposit events the moment a transfer is detected. It is designed to run as a sidecar service or standalone daemon, feeding downstream systems via files, databases, message queues, webhooks, SSE, or WebSockets.
 
-## When to Use
+---
 
-Use Pano when your application needs to detect incoming blockchain deposits in real time. Common use cases:
+## Overview
 
-- **Crypto exchange**: users deposit ETH/USDC/BTC/SOL to top up their balances
-- **Payment gateway / merchant**: generate a unique address per order and listen for the payment
-- **On-chain event monitoring**: any service that generates addresses for users and needs to react to incoming transfers
+Pano watches blockchain addresses for incoming deposits. It ingests addresses via file, database, HTTP API, or AMQP queue; scans EVM, Bitcoin, and Solana chains through configurable JSON-RPC endpoints; deduplicates and tracks confirmations; and delivers standardised deposit events to files, databases, AMQP, webhooks, SSE, or WebSockets.
 
-Pano supports EVM-compatible chains (Ethereum, Base, Polygon, Arbitrum, etc.), Bitcoin, and Solana — all from a single process.
+The processing flow is linear: `ingress → detector → egress`. All behaviour is driven by a single TOML config file.
 
-Do NOT use Pano to build a blockchain indexer, to scan historical state, or for general transaction monitoring. Pano is purpose-built for deposit detection: watching a specific set of addresses and emitting events when transfers arrive.
+## Feature Flags
 
-## Quick Start
+Pano uses Cargo features to keep the default build minimal:
 
-### Docker (recommended)
+| Feature    | Default | Enables                                           |
+|------------|---------|---------------------------------------------------|
+| `sqlite`   | **yes** | SQLite ingress/egress (via `sqlx`)                |
+| `server`   | no      | HTTP server, API, SSE, WebSocket, dashboard       |
+| `amqp`     | no      | AMQP (RabbitMQ) ingress/egress (via `lapin`)     |
+| `postgres` | no      | PostgreSQL ingress/egress (via `sqlx`)            |
+| `pg`       | no      | Alias for `postgres`                              |
+| `webhook`  | no      | HMAC-signed webhook egress delivery               |
+| `full`     | no      | All features: `server`, `webhook`, `sqlite`, `postgres`, `amqp` |
+
+Enable features at build time:
 
 ```bash
-docker run --rm --name pano -p 3210:3210 \
-  -v "$(pwd)/Config.toml:/etc/pano/Config.toml:ro" \
-  ghcr.io/melonask/pano:latest
+cargo install pano --features "server,postgres,amqp"
 ```
 
-### Cargo
+Config sections that require a disabled feature produce a clear error at startup, e.g.: `pano.egress.webhook.enabled requires feature "webhook"`.
+
+## Install
 
 ```bash
 cargo install pano
-cp Config.example.toml Config.toml   # edit this file
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/melonask/pano
+cd pano
+cargo build --release
+```
+
+## Quick Start
+
+```bash
+cp Config.example.toml Config.toml
+# Edit chains, assets, and RPC endpoints, then:
 pano --config Config.toml
 ```
 
-Config path defaults to `./Config.toml`, overridable via `--config` flag or `PANO_CONFIG` env var.
+Or with environment variable:
+
+```bash
+PANO_CONFIG=Config.toml pano
+```
+
+## CLI
+
+```
+pano [OPTIONS] [COMMAND]
+
+Commands:
+  ping    Verify the daemon process is present (container healthcheck)
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -c, --config <CONFIG>  Path to configuration file [env: PANO_CONFIG=Config.toml]
+  -h, --help             Print help
+  -V, --version          Print version
+```
+
+Pano reads `Config.toml` by default. Use `--config` to point at any TOML file, including a merged multi-package config (see Universal Integration Config below).
 
 ## Configuration
 
-Pano is driven entirely by a single TOML config file. Sensitive values (RPC keys, passwords) use `${ENV_VAR}` substitution — **unset variables produce a load error**, never silently become empty strings.
+Pano is configured through a single TOML file. The configuration model has two layers:
 
-### Minimal config (Ethereum mainnet, HTTP API + webhook)
+1. **Shared root sections** — reusable profiles for chains, assets, paths, transports, and stores. These may be shared with other packages (Ladon, Bria, Oracles) when running from a merged config.
+2. **`[pano]` namespace** — Pano-specific behaviour: server, detector, ingress, egress, and override permissions.
 
-```toml
-[server]
-enabled = true
-port = 3210
+Environment variable substitution uses `${VAR}` (required) and `${VAR:-default}` (optional fallback).
 
-[[chains]]
-caip2 = "eip155:1"
-confirmed_blocks = 12
-rpc = ["https://eth.llamarpc.com"]
-[[chains.assets]]
-symbol = "ETH"
-decimals = 18
+### Universal Integration Config
 
-[ingress.http]
-enabled = true
+Pano can read a merged `Config.toml` that contains sections for multiple packages. It:
 
-[egress.webhook]
-enabled = true
-url = "https://your-app.example.com/pano-webhook"
-secret = "your-hmac-secret"
-```
+- Parses shared root sections (`[chains]`, `[assets]`, `[paths]`, `[transports]`, `[stores]`, `[http]`, `[log]`, `[meta]`, `[runtime]`)
+- Parses the `[pano]` namespace
+- **Ignores** `[ladon]`, `[bria]`, and `[oracles]` sections
+- **Rejects** unknown fields inside `[pano]`
 
-### Chain configuration
+This means the same `Config.toml` works for all packages:
 
-Each chain is declared as a `[[chains]]` array entry. Key fields:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `caip2` | Yes | `"eip155:1"` (Ethereum), `"eip155:8453"` (Base), `"bip122:000000000019d6689c085ae165831e93"` (Bitcoin), `"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"` (Solana) |
-| `confirmed_blocks` | Yes | Blocks after which a deposit is considered confirmed (≥ 1). EVM: 12, Bitcoin: 6, Solana: 32 are common values |
-| `rpc` | Yes | Array of JSON-RPC URLs (failover order) |
-| `start_block` | No | Block to start scanning from. Omit to start from recent blocks |
-| `rpc_options.scan_interval_secs` | No | Seconds between scans (default 5) |
-
-Each chain declares its assets via `[[chains.assets]]`:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `symbol` | Yes | Ticker, e.g. `"ETH"`, `"USDC"`, `"USDT"` |
-| `decimals` | Yes | Decimal places (ETH = 18, USDC = 6, BTC = 8) |
-| `contract` | No | Token contract address. Omit for native currency (ETH/BTC/SOL) |
-| `min_amount` | No | Minimum deposit in smallest unit (e.g. `"1000000"` for 1 USDC). Deposits below this are silently ignored |
-
-**Multi-chain example:**
-
-```toml
-[[chains]]
-caip2 = "eip155:1"
-confirmed_blocks = 12
-rpc = ["https://eth.llamarpc.com"]
-[[chains.assets]]
-symbol = "ETH"
-decimals = 18
-[[chains.assets]]
-symbol = "USDC"
-contract = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
-decimals = 6
-[[chains.assets]]
-symbol = "USDT"
-contract = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
-decimals = 6
-
-[[chains]]
-caip2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
-confirmed_blocks = 32
-rpc = ["https://api.mainnet-beta.solana.com"]
-[[chains.assets]]
-symbol = "SOL"
-decimals = 9
-[[chains.assets]]
-symbol = "USDC"
-contract = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-decimals = 6
-
-[[chains]]
-caip2 = "bip122:000000000019d6689c085ae165831e93"
-confirmed_blocks = 6
-rpc = ["http://btc-node:8332"]
-[[chains.assets]]
-symbol = "BTC"
-decimals = 8
-```
-
-## Sending Addresses to Watch (Ingress)
-
-Pano starts with zero watched addresses. You feed addresses in through one or more ingress sources. All sources can be active simultaneously — they merge into one watched set.
-
-### HTTP API (recommended for dynamic use)
-
-Enable `[ingress.http]`, then use REST endpoints:
-
-**Add an address** (expand to all configured chains/assets):
 ```bash
-curl -X POST http://localhost:3210/v1/addresses \
-  -H 'Content-Type: application/json' \
-  -d '{"address":"0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5"}'
-```
-Response: `201 Created` (empty body)
-
-**Add with specific chain/asset selection:**
-```bash
-curl -X POST http://localhost:3210/v1/addresses \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "address": "0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5",
-    "chains": [
-      { "caip2": "eip155:1", "assets": [{ "symbol": "USDC" }, { "symbol": "USDT" }] }
-    ]
-  }'
+ladon   --config Config.toml
+pano    --config Config.toml
+bria    --config Config.toml
+oracles --config Config.toml
 ```
 
-**Remove an address:**
-```bash
-curl -X DELETE http://localhost:3210/v1/addresses/0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5
-```
-Response: `204 No Content`
+### Shared Profiles
 
-**Error responses** use the envelope `{"error":"...","message":"..."}`:
-- `400` — validation error (invalid address, unknown chain, etc.)
-- `401` — missing/wrong API key (if `server.api_key` is set)
-- `409` — duplicate (address, chain, symbol) triad already watched
-- `404` — address not found on DELETE
+Pano resolves package-local references against shared profiles:
 
-### File Ingress (for static/bulk address lists)
+| Pano field | Resolves to | Local override |
+|---|---|---|
+| `pano.chains = ["eth"]` | `[chains.eth]` | N/A |
+| `pano.assets = ["eth"]` | `[assets.eth]` | N/A |
+| `pano.ingress.file.path_ref = "pano_watches"` | `[paths.pano_watches].path` | `path = "..."` |
+| `pano.egress.file.path_ref = "pano_events"` | `[paths.pano_events].path` | `path = "..."` |
+| `pano.ingress.amqp.transport = "local"` | `[transports.amqp.local]` | N/A |
+| `pano.egress.amqp.transport = "local"` | `[transports.amqp.local]` | N/A |
+| `pano.egress.webhook.transport = "ops"` | `[transports.webhook.ops]` | URL, timeout, retries |
+| `pano.ingress.sqlite.store = "pano"` | `[stores.pano]` | N/A |
+| `pano.egress.pg.store = "postgres"` | `[stores.postgres]` | N/A |
 
-Point Pano at a JSON, JSONL, or CSV file. Pano hot-reloads the file on modification.
+Explicit package-local values override profile values. Unknown references fail with actionable errors.
+
+### Package-Specific Configuration
+
+All Pano behaviour lives under the `[pano]` namespace:
+
+#### `[pano]`
+
+| Field | Default | Description |
+|---|---|---|
+| `chains` | `[]` | Chain ids from `[chains.<id>]` to scan |
+| `assets` | `[]` | Asset ids from `[assets.<id>]` to detect |
+
+#### `[pano.server]`
+
+Requires feature `server`.
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Start the HTTP server |
+| `bind` | `"0.0.0.0"` | Bind address |
+| `port` | `3210` | Listen port |
+| `prefix` | `"v1"` | URL prefix for API routes |
+| `api_key` | `""` | Optional shared API key (Bearer or X-Pano-API-Key header) |
+| `dashboard_path_ref` | `""` | Path profile from `[paths]` for static dashboard |
+| `dashboard_export` | `false` | Export masked `config.json` and `addresses.json` into dashboard dir |
+| `shutdown_timeout_secs` | `1` | Graceful shutdown timeout for background tasks |
+
+#### `[pano.detector]`
+
+| Field | Default | Description |
+|---|---|---|
+| `dedup_window_size` | `100000` | Max recent event keys for in-memory deduplication (0 = unbounded) |
+| `delivery_workers` | `8` | Async workers for per-address egress override delivery |
+| `delivery_queue_capacity` | `4096` | Queue capacity for override delivery |
+| `command_queue_capacity` | `256` | Queue capacity between ingress and detector |
+| `stale_event_eviction_multiplier` | `10` | Multiplier for stale event eviction threshold |
+| `stale_event_eviction_min_blocks` | `1000` | Minimum blocks before stale event eviction |
+| `max_decimals` | `30` | Maximum accepted asset decimal places |
+
+#### `[pano.rpc_defaults]`
+
+Applied to all chains as default RPC tuning.
+
+| Field | Default | Description |
+|---|---|---|
+| `max_concurrent` | `10` | Max concurrent RPC requests per chain |
+| `delay_ms` | `0` | Fixed delay between RPC calls |
+| `batch_size` | `200` | Block batch size for EVM/Bitcoin scan cycles |
+| `scan_lookback_blocks` | `50` | Re-scan depth for reorg safety (Solana effective default: 500) |
+| `scan_interval_secs` | `5` | Minimum seconds between scans |
+| `scan_timeout_secs` | `60` | Max wall-clock seconds per chain scan |
+| `max_native_scan_per_cycle` | `100` | EVM native-coin blocks scanned per cycle |
+| `request_timeout_secs` | `15` | Per-request RPC HTTP timeout |
+| `max_retries` | `3` | Retry rounds across configured endpoints |
+| `retry_base_ms` | `500` | Base delay for exponential retry backoff |
+| `solana_max_supported_transaction_version` | `0` | Solana getTransaction option |
+| `solana_scan_mode` | `"blocks"` | Solana scan mode: `"blocks"` or `"signatures"` |
+| `evm_log_address_batching` | `true` | EVM address-array batching for eth_getLogs |
+
+#### `[pano.overrides.chain]`
+
+| Field | Default | Description |
+|---|---|---|
+| `assets` | `false` | Allow per-watch asset overrides |
+
+#### `[pano.overrides.egress]`
+
+| Field | Default | Description |
+|---|---|---|
+| `webhook` / `file` / `pg` / `sqlite` / `queue` / `http` | `false` | Allow per-watch egress channel overrides |
+
+#### `[pano.ingress]`
+
+| Field | Default | Description |
+|---|---|---|
+| `command_queue_capacity` | `4096` | Bounded command queue capacity |
+
+- `[pano.ingress.file]` — `enabled`, `path_ref`, `path` (override), `poll_interval_secs`
+- `[pano.ingress.http]` — (requires `server`) `enabled`, `path`, `transport`
+- `[pano.ingress.sqlite]` — (requires `sqlite`) `enabled`, `store`, `poll_interval_secs`, `table`
+- `[pano.ingress.pg]` — (requires `pg`/`postgres`) `enabled`, `store`, `poll_interval_secs`, `table`
+- `[pano.ingress.amqp]` — (requires `amqp`) `enabled`, `transport`, `exchange`, `routing_key`, `consumer_tag`
+
+#### `[pano.egress]`
+
+- `[pano.egress.file]` — `enabled`, `path_ref`, `path` (override), `template`
+- `[pano.egress.sqlite]` — (requires `sqlite`) `enabled`, `store`, `table`
+- `[pano.egress.pg]` — (requires `pg`/`postgres`) `enabled`, `store`, `table`
+- `[pano.egress.amqp]` — (requires `amqp`) `enabled`, `transport`, `exchange`, `detected_routing_key`, `confirmed_routing_key`
+- `[pano.egress.webhook]` — (requires `webhook`) `enabled`, `transport`, `url` (override), `secret`, `signature_header`, `timeout_secs`, `max_retries`, `retry_base_ms`
+- `[pano.egress.stream]` — (requires `server`) `enabled`, `sse`, `websocket`, `ws_heartbeat_secs`, `sse_keepalive_secs`, `broadcast_capacity`
+
+## Database Backends
+
+| Backend | Feature | Default | Notes |
+|---|---|---|---|
+| SQLite | `sqlite` | **Yes** | In-process; ideal for single-instance and local dev. |
+| PostgreSQL | `pg` or `postgres` | No | Multi-instance; shared connection pooling. |
+
+Database connections are configured through shared `[stores.<id>]` profiles:
 
 ```toml
-[ingress.file]
-enabled = true
-path = "addresses.jsonl"
-poll_interval_secs = 5
-authoritative = true   # true = file IS the watched set; false = diff changes only
+[stores.pano]
+driver = "sqlite"
+url = "sqlite://data/pano/pano.db"
+
+# Or for Postgres:
+[stores.postgres]
+driver = "postgres"
+url = "${DATABASE_URL:-postgres://localhost/pano}"
 ```
 
-**JSONL format** (one `WatchSpec` per line):
-```jsonl
-{"address":"0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5"}
-{"address":"bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080","chains":[{"caip2":"bip122:000000000019d6689c085ae165831e93"}]}
-```
+Ingress and egress sections reference stores via `store = "<id>"`.
 
-**JSON format** (array):
-```json
-[
-  {"address":"0x9522..."},
-  {"address":"0xabcd..."}
-]
-```
+## Path and Transport Profiles
 
-**CSV format** (no header row): `address,chains_json,egress_json`
-
-### Database Ingress (SQLite / PostgreSQL)
-
-Pano polls a table for watch records. Set `poll_interval_secs = 0` for one-shot load.
+Instead of repeating file paths and connection details in every Pano section, define them once in shared profiles:
 
 ```toml
-[ingress.pg]
-enabled = true
-url = "postgres://user:pass@localhost:5432/mydb"
-poll_interval_secs = 5
-```
+[paths.pano_watches]
+kind = "file"
+path = "data/pano/addresses.jsonl"
+format = "jsonl"
 
-Required table schema:
-```sql
-CREATE TABLE watched_addresses (
-  address      TEXT NOT NULL,
-  caip2        TEXT NOT NULL,
-  symbol       TEXT NOT NULL,
-  asset_config TEXT,       -- nullable JSON
-  chain_config TEXT,       -- nullable JSON
-  egress       TEXT,       -- nullable JSON
-  PRIMARY KEY (address, caip2, symbol)
-);
-```
+[transports.amqp.local]
+url = "amqp://localhost:5672"
+reconnect_secs = 5
 
-### AMQP Queue Ingress
-
-Consume `WatchSpec` and `Unwatch` messages from an AMQP exchange.
-
-```toml
-[ingress.queue]
-enabled = true
-url = "amqp://localhost"
-exchange = "pano.watch"
-watch_routing_key = "watch"
-unwatch_routing_key = "unwatch"
-```
-
-Publish a `WatchSpec` JSON to add, or `{"address":"..."}` to remove.
-
-## Receiving Deposit Events (Egress)
-
-Events are broadcast to all enabled egress targets simultaneously. Choose the one(s) that fit your architecture.
-
-### Webhook (simplest HTTP integration)
-
-Pano POSTs each event as JSON to your endpoint with optional HMAC-SHA256 signing.
-
-```toml
-[egress.webhook]
-enabled = true
-url = "https://your-app.example.com/pano-webhook"
-secret = "your-hmac-secret"
+[transports.webhook.ops]
+url = "${OPS_WEBHOOK_URL:-}"
+timeout_secs = 10
 max_retries = 3
-retry_base_ms = 250
-timeout_secs = 30
 ```
 
-Your endpoint receives:
-```http
-POST /pano-webhook HTTP/1.1
-Content-Type: application/json
-X-Pano-Event: pano.deposit.detected
-X-Pano-Signature: <hex-hmac-sha256>
+Then reference them from Pano:
 
+```toml
+[pano.ingress.file]
+enabled = true
+path_ref = "pano_watches"
+
+[pano.egress.amqp]
+enabled = true
+transport = "local"
+exchange = "pano.egress"
+
+[pano.egress.webhook]
+enabled = true
+transport = "ops"
+```
+
+## Environment Variables
+
+| Variable | Description |
+|---|---|
+| `PANO_CONFIG` | Path to the TOML config file (default: `Config.toml`) |
+| `RUST_LOG` | Log filter (e.g. `pano=info`, `pano=debug`) |
+
+Any `${VAR}` or `${VAR:-default}` in config values is resolved at load time. Required vars without a default cause a load error.
+
+## Examples
+
+See [Config.example.toml](Config.example.toml) for a complete annotated example with all sections.
+
+## Architecture
+
+```
+                 ┌──────────────────────────────┐
+                 │           Ingress            │
+                 │  HTTP / File / DB / Queue    │
+                 └──────────────┬───────────────┘
+                                │ Watch / Unwatch / SyncAll commands
+                                ▼
+                 ┌──────────────────────────────┐
+                 │          Detector            │
+                 │  Chain scanners (BTC/EVM/SOL)│
+                 │  Dedup window                │
+                 │  Confirmation tracker        │
+                 │  Egress router               │
+                 └──────────────┬───────────────┘
+                                │ DepositEvent (broadcast)
+                                ▼
+                 └──────────────────────────────┘
+                 │           Egress             │
+                 │  File / DB / Queue / Webhook │
+                 │  SSE / WebSocket             │
+                 └──────────────────────────────┘
+```
+
+## Supported Chains
+
+| Chain type | CAIP-2 namespace | Notes |
+|---|---|---|
+| EVM-compatible | `eip155` | Native ETH and ERC-20 tokens via eth_getLogs |
+| Bitcoin | `bip122` | Native BTC via getblock (verbosity 2) |
+| Solana | `solana` | Native SOL and SPL tokens via getBlock |
+
+## Event Schema
+
+All events share this envelope:
+
+```json
 {
-  "event_id": "01HXYZABC...",
+  "event_id": "01HXYZ...",
   "event": "pano.deposit.detected",
   "version": 1,
   "occurred_at": "2025-06-01T12:00:00Z",
   "data": {
-    "tx_id": "0xabc123...",
+    "tx_id": "0xabc...",
     "caip2": "eip155:1",
     "symbol": "USDC",
-    "address": "0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5",
-    "block_number": 20000000,
+    "address": "0xrecipient...",
+    "block_number": 19000000,
     "log_index": 3,
     "amount": "1000000",
-    "sender": "0xdef456...",
+    "sender": "0xsender...",
     "confirmations": 1,
     "timestamp": "2025-06-01T11:59:58Z"
   }
 }
 ```
 
-**Verifying the signature** (HMAC-SHA256 over the raw request body):
-```python
-import hmac, hashlib
-expected = hmac.new(secret.encode(), request_body, hashlib.sha256).hexdigest()
-# compare with request.headers["X-Pano-Signature"]
-```
-
-### PostgreSQL / SQLite Egress
-
-Events are inserted into a table. Pano auto-creates the table and a dedup index on first use.
-
-```toml
-[egress.pg]
-enabled = true
-url = "postgres://user:pass@localhost:5432/mydb"
-```
-
-Schema: columns include `event_id`, `event`, `version`, `occurred_at`, `tx_id`, `caip2`, `symbol`, `address`, `block_number`, `log_index`, `amount`, `sender`, `confirmations`, `timestamp`. Inserts use `ON CONFLICT DO NOTHING` for idempotency.
-
-Query deposits for a user:
-```sql
-SELECT symbol, amount, block_number, confirmations
-FROM deposit_events
-WHERE address = '0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5'
-ORDER BY event_id;
-```
-
-### File Egress
-
-Append events to a file. `.jsonl` (one JSON object per line) is recommended.
-
-```toml
-[egress.file]
-enabled = true
-path = "/var/log/pano/events.jsonl"
-```
-
-### AMQP Egress
-
-Publish events to a topic exchange with separate routing keys for detected vs confirmed.
-
-```toml
-[egress.queue]
-enabled = true
-url = "amqp://localhost"
-exchange = "pano.deposits"
-detected_routing_key = "detected"
-confirmed_routing_key = "confirmed"
-```
-
-### SSE / WebSocket (real-time streaming)
-
-```toml
-[egress.http]
-enabled = true
-sse = "sse"
-websocket = "ws"
-```
+## Development
 
 ```bash
-curl -N http://localhost:3210/v1/sse       # Server-Sent Events
-# or connect to ws://localhost:3210/v1/ws   # WebSocket
+# Run tests with default features (sqlite only)
+cargo test
+
+# Run all tests including optional features
+cargo test --features full
+
+# Build with specific features
+cargo build --features "server,postgres,amqp"
+
+# Lint
+cargo clippy --features full
+
+# Format
+cargo fmt
 ```
 
-## Event Schema
+## Testing
 
-All deposit events follow the same schema. There are two event types:
+```bash
+# Unit and integration tests
+cargo test --features full
 
-| Event type | When it fires |
-|------------|---------------|
-| `pano.deposit.detected` | First observation of a transfer |
-| `pano.deposit.confirmed` | After `confirmed_blocks` have passed |
-
-Fields in `data`:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `tx_id` | string | Transaction hash (hex for EVM/BTC, base58 for Solana) |
-| `caip2` | string | Chain identifier, e.g. `"eip155:1"` |
-| `symbol` | string | Asset ticker, e.g. `"USDC"` |
-| `address` | string | The watched address that received the deposit |
-| `block_number` | u64 | Block/slot containing the transaction |
-| `log_index` | u64 | Position within the transaction (0 for simple transfers) |
-| `amount` | string | Raw amount in smallest unit (wei, satoshi, lamport). **Divide by 10^decimals** for human-readable value |
-| `sender` | string | Sender address (empty string if unknown) |
-| `confirmations` | u32 | Always 1 for detected events; actual depth for confirmed |
-| `timestamp` | string | Block timestamp in ISO 8601 |
-
-## Per-Address Egress Overrides
-
-Route events for specific addresses to different egress targets. Useful for routing high-value addresses to a separate webhook, or for merchant-specific delivery.
-
-First, enable the channels you want to allow in the config:
-```toml
-[override.egress]
-webhook = true
-file = false
-pg = false
-sqlite = false
-queue = false
+# Run end-to-end tests (requires local blockchain nodes)
+cargo test e2e_multichain --features full -- --ignored --nocapture
 ```
-
-Then include an `egress` block when adding the address:
-```json
-{
-  "address": "0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5",
-  "chains": [{ "caip2": "eip155:1", "assets": [{ "symbol": "USDC" }] }],
-  "egress": {
-    "webhook": { "url": "https://hooks.example.com/pano", "secret": "whsec_abc123" }
-  }
-}
-```
-
-Per-address overrides deliver in addition to the global egress broadcast — the event goes everywhere.
-
-## API Authentication
-
-When `server.api_key` is set in the config, all HTTP routes (API, SSE, WebSocket, dashboard) require authentication:
-
-```toml
-[server]
-api_key = "your-secret-key"
-```
-
-Clients must include either:
-- `Authorization: Bearer your-secret-key`
-- `X-Pano-API-Key: your-secret-key`
-
-Uses constant-time comparison to prevent timing attacks.
-
-## Integration Patterns
-
-### Exchange Deposit Flow
-
-```
-1. User requests a deposit address for ETH
-2. Your app generates/assigns an address, stores (user_id, address) mapping
-3. Your app POSTs the address to Pano via HTTP API
-4. Pano scans the chain, detects a deposit
-5. Pano POSTs a webhook to your app with the DepositEvent
-6. Your app reads event.data.address → looks up user_id → credits their balance
-```
-
-### Merchant Checkout Flow
-
-```
-1. Customer initiates checkout, selects USDC on Base
-2. Your backend generates a unique address for this order
-3. POST to Pano with per-address webhook override pointing to your order callback
-4. Pano detects the USDC transfer and fires a webhook to your callback URL
-5. Your callback marks the order as paid
-6. After TTL/cleanup, DELETE the address from Pano
-```
-
-### Cold Storage Monitoring
-
-```
-1. Add your treasury addresses via file ingress (authoritative mode)
-2. Use PostgreSQL egress to persist all events
-3. Query the deposit_events table periodically or trigger on new rows
-4. Pano handles reorg safety with configurable scan_lookback_blocks
-```
-
-## Environment Variables
-
-| Variable | Purpose |
-|----------|---------|
-| `PANO_CONFIG` | Path to config file (default: `Config.toml`) |
-| `RUST_LOG` | Log level: `pano=info`, `pano=debug` |
-| Any `${VAR}` in config | Substituted at load — unset vars cause an error |
-
-## Important Notes
-
-- **Amounts are raw integers**: `"1000000"` means 1 USDC (6 decimals), `"1000000000000000000"` means 1 ETH (18 decimals). Always divide by `10^decimals` for display.
-- **Address normalization**: EVM addresses are lowercased, bech32 Bitcoin addresses are lowercased, Solana and legacy Bitcoin addresses preserve case. Use the address as returned in events for lookups.
-- **Dedup is in-memory**: restarts lose the dedup window. If you restart Pano, you may receive duplicate events. Your downstream consumer should be idempotent (check `event_id` or the `(tx_id, caip2, symbol, address, amount, log_index)` composite key).
-- **No historical scanning**: Pano scans forward from the configured `start_block`. It does not backfill deposits that occurred before it started watching.
-- **`confirmed_blocks` must be ≥ 1**: detected events fire immediately; confirmed events fire after the configured depth. For instant-only detection, use the detected event and ignore confirmed.
-- **File egress JSON format** rewrites the entire array on each event — use JSONL for append-only behavior.

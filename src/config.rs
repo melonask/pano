@@ -1,5 +1,10 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+// ── Re-export egress/ingress config types (unchanged public API) ──────────
 
 pub use crate::egress::file::FileEgressConfig;
 pub use crate::egress::pg::{PgEgressColumns, PgEgressConfig, PgEgressTable};
@@ -12,6 +17,8 @@ pub use crate::ingress::file::FileIngressConfig;
 pub use crate::ingress::pg::{PgIngressColumns, PgIngressConfig, PgIngressTable};
 pub use crate::ingress::queue::QueueIngressConfig;
 pub use crate::ingress::sqlite::{SqliteIngressColumns, SqliteIngressConfig, SqliteIngressTable};
+
+// ── Internal column refs trait ────────────────────────────────────────────
 
 trait EgressColumnRefs {
     fn egress_column_refs(&self) -> [(&'static str, &str); 14];
@@ -45,7 +52,606 @@ macro_rules! impl_egress_column_refs {
 impl_egress_column_refs!(SqliteEgressColumns);
 impl_egress_column_refs!(PgEgressColumns);
 
-/// Top-level application configuration.
+// ── Shared universal config (root-level sections) ────────────────────────
+
+/// Universal shared configuration parsed from root-level TOML sections.
+/// Pano reads `[chains]`, `[assets]`, `[paths]`, `[transports]`, `[stores]`,
+/// `[http]`, `[log]`, `[meta]`, `[runtime]`, and `[pano]`. Other package
+/// namespaces (`[ladon]`, `[bria]`, `[oracles]`) are silently ignored.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct UniversalConfig {
+    version: Option<u64>,
+    meta: Option<MetaConfig>,
+    log: Option<LogConfig>,
+    runtime: Option<RuntimeConfig>,
+    http: Option<HttpConfig>,
+    stores: BTreeMap<String, StoreConfig>,
+    chains: BTreeMap<String, SharedChainConfig>,
+    assets: BTreeMap<String, SharedAssetConfig>,
+    paths: BTreeMap<String, PathConfig>,
+    objects: BTreeMap<String, ObjectConfig>,
+    transports: TransportConfigs,
+    // Package namespace — parsed selectively below.
+    pano: Option<PanoRootConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+struct TransportConfigs {
+    amqp: BTreeMap<String, AmqpTransportConfig>,
+    webhook: BTreeMap<String, WebhookTransportConfig>,
+    http: BTreeMap<String, HttpTransportConfig>,
+}
+
+// ── Shared root section types ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+struct MetaConfig {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    environment: String,
+    #[serde(default)]
+    data_dir: String,
+    #[serde(default)]
+    profile: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LogConfig {
+    #[serde(default)]
+    level: String,
+    #[serde(default)]
+    format: String,
+    #[serde(default)]
+    file: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeConfig {
+    #[serde(default)]
+    worker_threads: u32,
+    #[serde(default)]
+    shutdown_timeout_secs: u64,
+    #[serde(default)]
+    tmp_dir: String,
+    #[serde(default)]
+    max_payload_bytes: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HttpConfig {
+    #[serde(default)]
+    user_agent: String,
+    #[serde(default)]
+    request_timeout_secs: u64,
+    #[serde(default)]
+    max_retries: u32,
+    #[serde(default)]
+    retry_backoff_ms: u64,
+    #[serde(default)]
+    bind: String,
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StoreConfig {
+    #[serde(default)]
+    driver: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    migrate: bool,
+    #[serde(default)]
+    connect_timeout_secs: u64,
+    #[serde(default)]
+    max_connections: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SharedChainConfig {
+    #[serde(default)]
+    family: String,
+    caip2: String,
+    #[serde(default)]
+    native_symbol: String,
+    #[serde(default)]
+    rpc_urls: Vec<String>,
+    #[serde(default)]
+    confirmations: u32,
+    #[serde(default)]
+    derivation: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SharedAssetConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    chain: String,
+    symbol: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    contract: Option<String>,
+    #[serde(default)]
+    decimals: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PathConfig {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    format: String,
+    #[serde(default)]
+    create_parent_dirs: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ObjectConfig {
+    #[serde(default)]
+    driver: String,
+    #[serde(default)]
+    root: String,
+    #[serde(default)]
+    public_base_url: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AmqpTransportConfig {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    username: String,
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    virtual_host: String,
+    #[serde(default)]
+    reconnect_secs: u64,
+    #[serde(default)]
+    qos_prefetch: u16,
+    #[serde(default)]
+    tls: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct WebhookTransportConfig {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    method: String,
+    #[serde(default)]
+    auth_scheme: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    auth_header: String,
+    #[serde(default)]
+    timeout_secs: u64,
+    #[serde(default)]
+    max_retries: u32,
+    #[serde(default)]
+    retry_base_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HttpTransportConfig {
+    #[serde(default)]
+    base_url: String,
+    #[serde(default)]
+    user_agent: String,
+    #[serde(default)]
+    timeout_secs: u64,
+    #[serde(default)]
+    max_retries: u32,
+    #[serde(default)]
+    retry_base_ms: u64,
+}
+
+// ── Pano package namespace config ────────────────────────────────────────
+
+/// Root `[pano]` section. Unknown fields are rejected.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoRootConfig {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    store: String,
+    #[serde(default)]
+    chains: Vec<String>,
+    #[serde(default)]
+    assets: Vec<String>,
+    #[serde(default)]
+    server: PanoServerConfig,
+    #[serde(default)]
+    detector: PanoDetectorConfig,
+    #[serde(default)]
+    rpc_defaults: PanoRpcDefaultsConfig,
+    #[serde(default)]
+    overrides: PanoOverridesConfig,
+    #[serde(default)]
+    ingress: PanoIngressConfig,
+    #[serde(default)]
+    egress: PanoEgressConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoServerConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    bind: String,
+    #[serde(default = "default_pano_port")]
+    port: u16,
+    #[serde(default)]
+    prefix: String,
+    #[serde(default)]
+    api_key: String,
+    #[serde(default)]
+    dashboard_path_ref: String,
+    #[serde(default)]
+    dashboard_export: bool,
+    #[serde(default = "default_shutdown_timeout_secs")]
+    shutdown_timeout_secs: u64,
+}
+
+impl Default for PanoServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: String::new(),
+            port: default_pano_port(),
+            prefix: String::new(),
+            api_key: String::new(),
+            dashboard_path_ref: String::new(),
+            dashboard_export: false,
+            shutdown_timeout_secs: default_shutdown_timeout_secs(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoDetectorConfig {
+    #[serde(default = "default_dedup_window_size")]
+    dedup_window_size: usize,
+    #[serde(default = "default_delivery_workers")]
+    delivery_workers: usize,
+    #[serde(default = "default_delivery_queue_capacity")]
+    delivery_queue_capacity: usize,
+    #[serde(default = "default_detector_command_queue_capacity")]
+    command_queue_capacity: usize,
+    #[serde(default = "default_stale_event_eviction_multiplier")]
+    stale_event_eviction_multiplier: u64,
+    #[serde(default = "default_stale_event_eviction_min_blocks")]
+    stale_event_eviction_min_blocks: u64,
+    #[serde(default = "default_max_decimals")]
+    max_decimals: u32,
+}
+
+impl Default for PanoDetectorConfig {
+    fn default() -> Self {
+        Self {
+            dedup_window_size: default_dedup_window_size(),
+            delivery_workers: default_delivery_workers(),
+            delivery_queue_capacity: default_delivery_queue_capacity(),
+            command_queue_capacity: default_detector_command_queue_capacity(),
+            stale_event_eviction_multiplier: default_stale_event_eviction_multiplier(),
+            stale_event_eviction_min_blocks: default_stale_event_eviction_min_blocks(),
+            max_decimals: default_max_decimals(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoRpcDefaultsConfig {
+    #[serde(default = "default_max_concurrent")]
+    max_concurrent: usize,
+    #[serde(default)]
+    delay_ms: u64,
+    #[serde(default = "default_batch_size")]
+    batch_size: u64,
+    #[serde(default = "default_true")]
+    evm_log_address_batching: bool,
+    #[serde(default = "default_scan_lookback_blocks")]
+    scan_lookback_blocks: u64,
+    #[serde(default = "default_scan_interval_secs")]
+    scan_interval_secs: u64,
+    #[serde(default = "default_scan_timeout_secs")]
+    scan_timeout_secs: u64,
+    #[serde(default = "default_max_native_scan_per_cycle")]
+    max_native_scan_per_cycle: u64,
+    #[serde(default = "default_request_timeout_secs")]
+    request_timeout_secs: u64,
+    #[serde(default = "default_max_retries")]
+    max_retries: u32,
+    #[serde(default = "default_retry_base_ms")]
+    retry_base_ms: u64,
+    #[serde(default)]
+    solana_max_supported_transaction_version: u64,
+    #[serde(default = "default_solana_scan_mode_str")]
+    solana_scan_mode: String,
+}
+
+impl Default for PanoRpcDefaultsConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: default_max_concurrent(),
+            delay_ms: 0,
+            batch_size: default_batch_size(),
+            evm_log_address_batching: true,
+            scan_lookback_blocks: default_scan_lookback_blocks(),
+            scan_interval_secs: default_scan_interval_secs(),
+            scan_timeout_secs: default_scan_timeout_secs(),
+            max_native_scan_per_cycle: default_max_native_scan_per_cycle(),
+            request_timeout_secs: default_request_timeout_secs(),
+            max_retries: default_max_retries(),
+            retry_base_ms: default_retry_base_ms(),
+            solana_max_supported_transaction_version: 0,
+            solana_scan_mode: default_solana_scan_mode_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoOverridesConfig {
+    #[serde(default)]
+    chain: PanoOverrideChainConfig,
+    #[serde(default)]
+    egress: PanoOverrideEgressConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoOverrideChainConfig {
+    #[serde(default)]
+    assets: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoOverrideEgressConfig {
+    #[serde(default)]
+    webhook: bool,
+    #[serde(default)]
+    file: bool,
+    #[serde(default)]
+    pg: bool,
+    #[serde(default)]
+    sqlite: bool,
+    #[serde(default)]
+    queue: bool,
+    #[serde(default)]
+    http: bool,
+}
+
+// ── Pano ingress config ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoIngressConfig {
+    #[serde(default = "default_ingress_command_queue_capacity")]
+    command_queue_capacity: usize,
+    #[serde(default)]
+    file: PanoIngressFileConfig,
+    #[serde(default)]
+    http: PanoIngressHttpConfig,
+    #[serde(default)]
+    sqlite: PanoIngressSqliteConfig,
+    #[serde(default)]
+    pg: PanoIngressPgConfig,
+    #[serde(default)]
+    amqp: PanoIngressAmqpConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoIngressFileConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    path_ref: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default = "default_file_poll_interval_secs")]
+    poll_interval_secs: u64,
+    #[serde(default)]
+    format: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoIngressHttpConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_http_ingress_path")]
+    path: String,
+    #[serde(default)]
+    transport: String,
+    #[serde(default = "default_http_max_body_bytes")]
+    max_body_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoIngressSqliteConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    store: String,
+    #[serde(default = "default_sqlite_poll_interval_secs")]
+    poll_interval_secs: u64,
+    #[serde(default = "default_watched_table")]
+    table: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoIngressPgConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    store: String,
+    #[serde(default = "default_sqlite_poll_interval_secs")]
+    poll_interval_secs: u64,
+    #[serde(default = "default_watched_table")]
+    table: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoIngressAmqpConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    transport: String,
+    #[serde(default = "default_amqp_ingress_exchange")]
+    exchange: String,
+    #[serde(default = "default_amqp_ingress_routing_key")]
+    routing_key: String,
+    #[serde(default = "default_pano_ingress_consumer_tag")]
+    consumer_tag: String,
+    #[serde(default)]
+    qos_prefetch: u16,
+}
+
+impl Default for PanoIngressConfig {
+    fn default() -> Self {
+        Self {
+            command_queue_capacity: default_ingress_command_queue_capacity(),
+            file: PanoIngressFileConfig::default(),
+            http: PanoIngressHttpConfig::default(),
+            sqlite: PanoIngressSqliteConfig::default(),
+            pg: PanoIngressPgConfig::default(),
+            amqp: PanoIngressAmqpConfig::default(),
+        }
+    }
+}
+
+// ── Pano egress config ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoEgressConfig {
+    #[serde(default)]
+    file: PanoEgressFileConfig,
+    #[serde(default)]
+    sqlite: PanoEgressSqliteConfig,
+    #[serde(default)]
+    pg: PanoEgressPgConfig,
+    #[serde(default)]
+    amqp: PanoEgressAmqpConfig,
+    #[serde(default)]
+    webhook: PanoEgressWebhookConfig,
+    #[serde(default)]
+    stream: PanoEgressStreamConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoEgressFileConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    path_ref: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    template: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoEgressSqliteConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    store: String,
+    #[serde(default = "default_deposit_events_table")]
+    table: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoEgressPgConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    store: String,
+    #[serde(default = "default_deposit_events_table")]
+    table: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoEgressAmqpConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    transport: String,
+    #[serde(default = "default_amqp_egress_exchange")]
+    exchange: String,
+    #[serde(default = "default_amqp_egress_detected_key")]
+    detected_routing_key: String,
+    #[serde(default = "default_amqp_egress_confirmed_key")]
+    confirmed_routing_key: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoEgressWebhookConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    transport: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    secret: String,
+    #[serde(default = "default_webhook_signature_header")]
+    signature_header: String,
+    #[serde(default)]
+    timeout_secs: u64,
+    #[serde(default)]
+    max_retries: u32,
+    #[serde(default)]
+    retry_base_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PanoEgressStreamConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_sse_path")]
+    sse: String,
+    #[serde(default = "default_websocket_path")]
+    websocket: String,
+    #[serde(default = "default_ws_heartbeat_secs")]
+    ws_heartbeat_secs: u64,
+    #[serde(default = "default_sse_keepalive_secs")]
+    sse_keepalive_secs: u64,
+    #[serde(default = "default_broadcast_capacity")]
+    broadcast_capacity: usize,
+}
+
+// ── Application config (public, preserves existing consumer API) ──────────
+
+/// Top-level application configuration. This is the runtime config that all
+/// Pano consumers use. It is built from the universal config + `[pano]` namespace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
@@ -454,40 +1060,231 @@ fn default_broadcast_capacity() -> usize {
     4096
 }
 
+// ── Defaults helpers for string/path defaults ────────────────────────────
+
+fn default_pano_port() -> u16 {
+    3210
+}
+fn default_file_poll_interval_secs() -> u64 {
+    5
+}
+fn default_http_ingress_path() -> String {
+    "watch".to_string()
+}
+fn default_http_max_body_bytes() -> u64 {
+    1_048_576
+}
+fn default_sqlite_poll_interval_secs() -> u64 {
+    5
+}
+fn default_watched_table() -> String {
+    "watched_addresses".to_string()
+}
+fn default_deposit_events_table() -> String {
+    "deposit_events".to_string()
+}
+fn default_amqp_ingress_exchange() -> String {
+    "pano.ingress".to_string()
+}
+fn default_amqp_ingress_routing_key() -> String {
+    "watch".to_string()
+}
+fn default_pano_ingress_consumer_tag() -> String {
+    "pano-ingress".to_string()
+}
+fn default_amqp_egress_exchange() -> String {
+    "pano.egress".to_string()
+}
+fn default_amqp_egress_detected_key() -> String {
+    "deposit.detected".to_string()
+}
+fn default_amqp_egress_confirmed_key() -> String {
+    "deposit.confirmed".to_string()
+}
+fn default_webhook_signature_header() -> String {
+    "X-Pano-Signature".to_string()
+}
+fn default_sse_path() -> String {
+    "events".to_string()
+}
+fn default_websocket_path() -> String {
+    "ws".to_string()
+}
+fn default_ws_heartbeat_secs() -> u64 {
+    15
+}
+fn default_sse_keepalive_secs() -> u64 {
+    15
+}
+fn default_solana_scan_mode_str() -> String {
+    "blocks".to_string()
+}
+
+// ── Resolution logic ──────────────────────────────────────────────────────
+
+fn resolve_path(cfg: &UniversalConfig, path_ref: &str, direct_path: &str) -> Result<String> {
+    if !direct_path.is_empty() {
+        return Ok(direct_path.to_string());
+    }
+    if path_ref.is_empty() {
+        return Ok(String::new());
+    }
+    let profile = cfg.paths.get(path_ref).ok_or_else(|| {
+        anyhow::anyhow!("unknown path_ref \"{path_ref}\": no [paths.{path_ref}] section found")
+    })?;
+    Ok(profile.path.clone())
+}
+
+fn resolve_store_url(
+    cfg: &UniversalConfig,
+    store: &str,
+    context: &str,
+    require_driver: Option<&str>,
+) -> Result<(String, String)> {
+    // "driver" and "url"
+    if store.is_empty() {
+        return Ok((String::new(), String::new()));
+    }
+    let s = cfg.stores.get(store).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown store \"{store}\" referenced at {context}: no [stores.{store}] section found"
+        )
+    })?;
+    if let Some(required) = require_driver
+        && s.driver != required
+    {
+        anyhow::bail!(
+            "store \"{store}\" at {context} has driver \"{}\" but \"{required}\" is required",
+            s.driver
+        );
+    }
+    Ok((s.driver.clone(), s.url.clone()))
+}
+
+fn resolve_amqp_transport(
+    cfg: &UniversalConfig,
+    transport: &str,
+    context: &str,
+) -> Result<AmqpTransportConfig> {
+    if transport.is_empty() {
+        anyhow::bail!(
+            "missing transport at {context}: set transport = \"<id>\" to reference [transports.amqp.<id>]"
+        );
+    }
+    cfg.transports.amqp.get(transport).cloned().ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown AMQP transport \"{transport}\" at {context}: no [transports.amqp.{transport}] section found"
+        )
+    })
+}
+
+fn resolve_webhook_transport(
+    cfg: &UniversalConfig,
+    transport: &str,
+    context: &str,
+) -> Result<WebhookTransportConfig> {
+    if transport.is_empty() {
+        anyhow::bail!(
+            "missing transport at {context}: set transport = \"<id>\" to reference [transports.webhook.<id>]"
+        );
+    }
+    cfg.transports
+        .webhook
+        .get(transport)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown webhook transport \"{transport}\" at {context}: no [transports.webhook.{transport}] section found"
+            )
+        })
+}
+
 // ── Validation ──────────────────────────────────────────────────────────
 
 impl AppConfig {
     /// Load configuration from a TOML file, resolving environment variable references.
+    /// This is the main entry point for the universal namespaced config model.
     pub fn load(path: &str) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config from {path}"))?;
         let resolved = Self::resolve_env_vars(&raw)?;
-        let config: Self = toml_edit::de::from_str(&resolved)
+        let universal: UniversalConfig = toml_edit::de::from_str(&resolved)
             .with_context(|| format!("failed to parse config from {path}"))?;
+
+        let pano = universal.pano.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("missing [pano] section in config: Pano requires a [pano] namespace with at least chains defined")
+        })?;
+
+        // ── Feature-gate checks ──────────────────────────────────────────
+        check_feature_server(&pano.server, &pano.ingress, &pano.egress.stream)?;
+        check_feature_amqp(&pano.ingress.amqp, &pano.egress.amqp)?;
+        check_feature_postgres(&pano.ingress.pg, &pano.egress.pg)?;
+        check_feature_webhook(&pano.egress.webhook)?;
+        #[cfg(not(feature = "sqlite"))]
+        check_feature_sqlite_disabled(&pano.ingress.sqlite, &pano.egress.sqlite)?;
+
+        // ── Build AppConfig from universal + pano namespace ──────────────
+
+        let server = build_server_config(&universal, pano)?;
+        let detector = build_detector_config(pano);
+        let chains = build_chains(&universal, pano)?;
+        let ingress = build_ingress_config(&universal, pano)?;
+        let egress = build_egress_config(&universal, pano)?;
+        let override_ = build_override_config(pano);
+
+        let config = AppConfig {
+            server,
+            detector,
+            chains,
+            ingress,
+            egress,
+            override_,
+        };
         config.validate()?;
         tracing::info!(path, chains = config.chains.len(), "configuration loaded");
         Ok(config)
     }
 
-    /// Replace `${VAR}` placeholders with environment variable values
-    /// in a single pass: the replacement values are never re-scanned for
-    /// additional `${...}` patterns.
+    /// Replace `${VAR}` and `${VAR:-default}` placeholders with environment
+    /// variable values in a single pass. Replacement values are never re-scanned.
+    /// TOML comment lines (starting with `#`) are stripped before substitution
+    /// to avoid resolving env vars in commented-out sections.
     pub fn resolve_env_vars(input: &str) -> Result<String> {
-        let re = regex_lite::Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+        // Strip full-line TOML comments (lines starting with optional whitespace then #),
+        // but keep empty lines to preserve TOML structure.
+        let filtered: String = input
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                trimmed.is_empty() || !trimmed.starts_with('#')
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let re = regex_lite::Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
             .context("failed to compile environment variable placeholder regex")?;
-        let mut result = String::with_capacity(input.len());
+        let mut result = String::with_capacity(filtered.len());
         let mut last = 0;
-        for m in re.find_iter(input) {
-            result.push_str(&input[last..m.start()]);
+        for m in re.find_iter(&filtered) {
+            result.push_str(&filtered[last..m.start()]);
             let full = m.as_str();
-            let var = &full[2..full.len() - 1];
-            let val = std::env::var(var).with_context(|| {
-                format!("environment variable {var} referenced in config is not set")
-            })?;
-            result.push_str(&val);
+            // Strip ${ and }
+            let inner = &full[2..full.len() - 1];
+            if let Some((var, default)) = inner.split_once(":-") {
+                let val = std::env::var(var).unwrap_or_else(|_| default.to_string());
+                result.push_str(&val);
+            } else {
+                let var = inner;
+                let val = std::env::var(var).with_context(|| {
+                    format!(
+                        "environment variable {var} referenced in config is not set (use ${{{var}:-default}} to provide a fallback)"
+                    )
+                })?;
+                result.push_str(&val);
+            }
             last = m.end();
         }
-        result.push_str(&input[last..]);
+        result.push_str(&filtered[last..]);
         Ok(result)
     }
 
@@ -770,5 +1567,501 @@ impl AppConfig {
     /// Look up a chain configuration by its CAIP-2 identifier.
     pub fn chain_by_caip2(&self, caip2: &str) -> Option<&ChainConfig> {
         self.chains.iter().find(|c| c.caip2 == caip2)
+    }
+}
+
+// ── Feature-gate checks ───────────────────────────────────────────────────
+
+fn check_feature_server(
+    server: &PanoServerConfig,
+    ingress: &PanoIngressConfig,
+    stream: &PanoEgressStreamConfig,
+) -> Result<()> {
+    #[cfg(not(feature = "server"))]
+    {
+        if server.enabled {
+            anyhow::bail!(
+                "pano.server.enabled requires feature \"server\" (rebuild with --features server)"
+            );
+        }
+        if ingress.http.enabled {
+            anyhow::bail!(
+                "pano.ingress.http.enabled requires feature \"server\" (rebuild with --features server)"
+            );
+        }
+        if stream.enabled {
+            anyhow::bail!(
+                "pano.egress.stream.enabled requires feature \"server\" (rebuild with --features server)"
+            );
+        }
+    }
+    let _ = (server, ingress, stream);
+    Ok(())
+}
+
+fn check_feature_amqp(
+    ingress_amqp: &PanoIngressAmqpConfig,
+    egress_amqp: &PanoEgressAmqpConfig,
+) -> Result<()> {
+    #[cfg(not(feature = "amqp"))]
+    {
+        if ingress_amqp.enabled {
+            anyhow::bail!(
+                "pano.ingress.amqp.enabled requires feature \"amqp\" (rebuild with --features amqp)"
+            );
+        }
+        if egress_amqp.enabled {
+            anyhow::bail!(
+                "pano.egress.amqp.enabled requires feature \"amqp\" (rebuild with --features amqp)"
+            );
+        }
+    }
+    let _ = (ingress_amqp, egress_amqp);
+    Ok(())
+}
+
+fn check_feature_postgres(
+    ingress_pg: &PanoIngressPgConfig,
+    egress_pg: &PanoEgressPgConfig,
+) -> Result<()> {
+    #[cfg(not(feature = "postgres"))]
+    {
+        if ingress_pg.enabled {
+            anyhow::bail!(
+                "pano.ingress.pg.enabled requires feature \"pg\" or \"postgres\" (rebuild with --features pg)"
+            );
+        }
+        if egress_pg.enabled {
+            anyhow::bail!(
+                "pano.egress.pg.enabled requires feature \"pg\" or \"postgres\" (rebuild with --features pg)"
+            );
+        }
+    }
+    let _ = (ingress_pg, egress_pg);
+    Ok(())
+}
+
+fn check_feature_webhook(webhook: &PanoEgressWebhookConfig) -> Result<()> {
+    #[cfg(not(feature = "webhook"))]
+    {
+        if webhook.enabled {
+            anyhow::bail!(
+                "pano.egress.webhook.enabled requires feature \"webhook\" (rebuild with --features webhook)"
+            );
+        }
+    }
+    let _ = webhook;
+    Ok(())
+}
+
+#[cfg(not(feature = "sqlite"))]
+fn check_feature_sqlite_disabled(
+    ingress_sqlite: &PanoIngressSqliteConfig,
+    egress_sqlite: &PanoEgressSqliteConfig,
+) -> Result<()> {
+    if ingress_sqlite.enabled {
+        anyhow::bail!(
+            "pano.ingress.sqlite.enabled requires feature \"sqlite\" (sqlite is the default; rebuild without --no-default-features)"
+        );
+    }
+    if egress_sqlite.enabled {
+        anyhow::bail!(
+            "pano.egress.sqlite.enabled requires feature \"sqlite\" (sqlite is the default; rebuild without --no-default-features)"
+        );
+    }
+    Ok(())
+}
+
+// ── Build helpers: universal + pano → AppConfig ──────────────────────────
+
+fn build_server_config(universal: &UniversalConfig, pano: &PanoRootConfig) -> Result<ServerConfig> {
+    let s = &pano.server;
+    let mut dashboard = String::new();
+    if !s.dashboard_path_ref.is_empty() {
+        let path = resolve_path(universal, &s.dashboard_path_ref, "")?;
+        dashboard = path;
+    }
+
+    let bind = if s.bind.is_empty() {
+        universal
+            .http
+            .as_ref()
+            .map(|h| h.bind.clone())
+            .unwrap_or_default()
+    } else {
+        s.bind.clone()
+    };
+    let prefix = if s.prefix.is_empty() {
+        universal
+            .http
+            .as_ref()
+            .map(|h| h.prefix.clone())
+            .unwrap_or_else(|| "v1".to_string())
+    } else {
+        s.prefix.clone()
+    };
+    let api_key = if s.api_key.is_empty() {
+        universal
+            .http
+            .as_ref()
+            .map(|h| h.api_key.clone())
+            .unwrap_or_default()
+    } else {
+        s.api_key.clone()
+    };
+
+    Ok(ServerConfig {
+        enabled: s.enabled,
+        bind,
+        port: s.port,
+        prefix,
+        dashboard,
+        dashboard_export: s.dashboard_export,
+        api_key,
+        shutdown_timeout_secs: s.shutdown_timeout_secs,
+    })
+}
+
+fn build_detector_config(pano: &PanoRootConfig) -> DetectorConfig {
+    let d = &pano.detector;
+    DetectorConfig {
+        dedup_window_size: d.dedup_window_size,
+        delivery_workers: d.delivery_workers,
+        delivery_queue_capacity: d.delivery_queue_capacity,
+        command_queue_capacity: d.command_queue_capacity,
+        stale_event_eviction_multiplier: d.stale_event_eviction_multiplier,
+        stale_event_eviction_min_blocks: d.stale_event_eviction_min_blocks,
+        max_decimals: d.max_decimals,
+    }
+}
+
+fn build_chains(universal: &UniversalConfig, pano: &PanoRootConfig) -> Result<Vec<ChainConfig>> {
+    let rpc_defaults = &pano.rpc_defaults;
+    let mut chains = Vec::new();
+
+    for chain_id in &pano.chains {
+        let shared = universal.chains.get(chain_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "pano.chains references unknown chain \"{chain_id}\": no [chains.{chain_id}] section found"
+            )
+        })?;
+
+        let rpc_options = RpcOptions {
+            max_concurrent: rpc_defaults.max_concurrent,
+            delay_ms: rpc_defaults.delay_ms,
+            batch_size: rpc_defaults.batch_size,
+            evm_log_address_batching: rpc_defaults.evm_log_address_batching,
+            scan_lookback_blocks: rpc_defaults.scan_lookback_blocks,
+            scan_interval_secs: rpc_defaults.scan_interval_secs,
+            scan_timeout_secs: rpc_defaults.scan_timeout_secs,
+            max_native_scan_per_cycle: rpc_defaults.max_native_scan_per_cycle,
+            request_timeout_secs: rpc_defaults.request_timeout_secs,
+            max_retries: rpc_defaults.max_retries,
+            retry_base_ms: rpc_defaults.retry_base_ms,
+            solana_max_supported_transaction_version: rpc_defaults
+                .solana_max_supported_transaction_version,
+            solana_scan_mode: if rpc_defaults.solana_scan_mode == "signatures" {
+                SolanaScanMode::Signatures
+            } else {
+                SolanaScanMode::Blocks
+            },
+        };
+
+        // Collect assets from shared [assets.<id>] that belong to this chain
+        let mut chain_assets = Vec::new();
+        for asset_id in &pano.assets {
+            let shared_asset = universal.assets.get(asset_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "pano.assets references unknown asset \"{asset_id}\": no [assets.{asset_id}] section found"
+                )
+            })?;
+            if shared_asset.chain == *chain_id && shared_asset.enabled {
+                chain_assets.push(AssetConfig {
+                    symbol: shared_asset.symbol.clone(),
+                    contract: shared_asset.contract.clone(),
+                    token_program: None,
+                    decimals: shared_asset.decimals,
+                    min_amount: None,
+                });
+            }
+        }
+
+        if chain_assets.is_empty() {
+            anyhow::bail!(
+                "chain \"{chain_id}\" has no enabled assets in pano.assets; add at least one [assets.<id>] with chain = \"{chain_id}\" and include it in pano.assets"
+            );
+        }
+
+        chains.push(ChainConfig {
+            caip2: shared.caip2.clone(),
+            start_block: None,
+            end_block: None,
+            confirmed_blocks: shared.confirmations,
+            rpc: shared.rpc_urls.clone(),
+            rpc_options: Some(rpc_options),
+            assets: chain_assets,
+        });
+    }
+
+    Ok(chains)
+}
+
+fn build_ingress_config(
+    universal: &UniversalConfig,
+    pano: &PanoRootConfig,
+) -> Result<IngressConfig> {
+    let pi = &pano.ingress;
+
+    // File ingress
+    let file_path = resolve_path(universal, &pi.file.path_ref, &pi.file.path)?;
+    let fi = FileIngressConfig {
+        enabled: pi.file.enabled,
+        path: file_path,
+        poll_interval_secs: pi.file.poll_interval_secs,
+        authoritative: true,
+    };
+
+    // HTTP ingress
+    let hi = HttpIngressConfig {
+        enabled: pi.http.enabled,
+        addresses: pi.http.path.clone(),
+    };
+
+    // SQLite ingress
+    let si = if pi.sqlite.enabled {
+        let (_, sqlite_url) = resolve_store_url(
+            universal,
+            &pi.sqlite.store,
+            "pano.ingress.sqlite.store",
+            None,
+        )?;
+        SqliteIngressConfig {
+            enabled: true,
+            path: extract_sqlite_path(&sqlite_url),
+            poll_interval_secs: pi.sqlite.poll_interval_secs,
+            table: SqliteIngressTable {
+                name: pi.sqlite.table.clone(),
+                columns: SqliteIngressColumns::default(),
+            },
+        }
+    } else {
+        SqliteIngressConfig::default()
+    };
+
+    // PG ingress
+    let pgi = if pi.pg.enabled {
+        let (_pg_driver, pg_url) = resolve_store_url(
+            universal,
+            &pi.pg.store,
+            "pano.ingress.pg.store",
+            Some("postgres"),
+        )?;
+        PgIngressConfig {
+            enabled: true,
+            url: pg_url,
+            poll_interval_secs: pi.pg.poll_interval_secs,
+            table: PgIngressTable {
+                name: pi.pg.table.clone(),
+                columns: PgIngressColumns::default(),
+            },
+        }
+    } else {
+        PgIngressConfig::default()
+    };
+
+    // AMQP ingress
+    let qi = if pi.amqp.enabled {
+        let amqp = resolve_amqp_transport(universal, &pi.amqp.transport, "pano.ingress.amqp")?;
+        let qos = if pi.amqp.qos_prefetch > 0 {
+            pi.amqp.qos_prefetch
+        } else {
+            amqp.qos_prefetch
+        };
+        QueueIngressConfig {
+            enabled: true,
+            url: amqp.url,
+            username: amqp.username,
+            password: amqp.password,
+            exchange: pi.amqp.exchange.clone(),
+            watch_routing_key: pi.amqp.routing_key.clone(),
+            unwatch_routing_key: String::new(),
+            reconnect_secs: amqp.reconnect_secs,
+            qos_prefetch: qos,
+            consumer_tag: pi.amqp.consumer_tag.clone(),
+        }
+    } else {
+        QueueIngressConfig::default()
+    };
+
+    Ok(IngressConfig {
+        file: fi,
+        sqlite: si,
+        pg: pgi,
+        queue: qi,
+        http: hi,
+        command_queue_capacity: pi.command_queue_capacity,
+    })
+}
+
+fn build_egress_config(universal: &UniversalConfig, pano: &PanoRootConfig) -> Result<EgressConfig> {
+    let pe = &pano.egress;
+
+    // File egress
+    let file_path = resolve_path(universal, &pe.file.path_ref, &pe.file.path)?;
+    let fe = FileEgressConfig {
+        enabled: pe.file.enabled,
+        path: file_path,
+    };
+
+    // SQLite egress
+    let se = if pe.sqlite.enabled {
+        let (_, sqlite_url) = resolve_store_url(
+            universal,
+            &pe.sqlite.store,
+            "pano.egress.sqlite.store",
+            None,
+        )?;
+        SqliteEgressConfig {
+            enabled: true,
+            path: extract_sqlite_path(&sqlite_url),
+            table: SqliteEgressTable {
+                name: pe.sqlite.table.clone(),
+                columns: SqliteEgressColumns::default(),
+            },
+        }
+    } else {
+        SqliteEgressConfig::default()
+    };
+
+    // PG egress
+    let pge = if pe.pg.enabled {
+        let (_pg_driver, pg_url) = resolve_store_url(
+            universal,
+            &pe.pg.store,
+            "pano.egress.pg.store",
+            Some("postgres"),
+        )?;
+        PgEgressConfig {
+            enabled: true,
+            url: pg_url,
+            table: PgEgressTable {
+                name: pe.pg.table.clone(),
+                columns: PgEgressColumns::default(),
+            },
+        }
+    } else {
+        PgEgressConfig::default()
+    };
+
+    // AMQP egress
+    let qe = if pe.amqp.enabled {
+        let amqp = resolve_amqp_transport(universal, &pe.amqp.transport, "pano.egress.amqp")?;
+        QueueEgressConfig {
+            enabled: true,
+            url: amqp.url,
+            username: amqp.username,
+            password: amqp.password,
+            exchange: pe.amqp.exchange.clone(),
+            detected_routing_key: pe.amqp.detected_routing_key.clone(),
+            confirmed_routing_key: pe.amqp.confirmed_routing_key.clone(),
+            reconnect_secs: amqp.reconnect_secs,
+        }
+    } else {
+        QueueEgressConfig::default()
+    };
+
+    // Webhook egress
+    let we = if pe.webhook.enabled {
+        let wh =
+            resolve_webhook_transport(universal, &pe.webhook.transport, "pano.egress.webhook")?;
+        let url = if pe.webhook.url.is_empty() {
+            wh.url.clone()
+        } else {
+            pe.webhook.url.clone()
+        };
+        let timeout = if pe.webhook.timeout_secs > 0 {
+            pe.webhook.timeout_secs
+        } else {
+            wh.timeout_secs.max(30)
+        };
+        let max_retries = if pe.webhook.max_retries > 0 {
+            pe.webhook.max_retries
+        } else if wh.max_retries > 0 {
+            wh.max_retries
+        } else {
+            3
+        };
+        let retry_base_ms = if pe.webhook.retry_base_ms > 0 {
+            pe.webhook.retry_base_ms
+        } else if wh.retry_base_ms > 0 {
+            wh.retry_base_ms
+        } else {
+            250
+        };
+        WebhookEgressConfig {
+            enabled: true,
+            url,
+            secret: pe.webhook.secret.clone(),
+            max_retries,
+            retry_base_ms,
+            timeout_secs: timeout,
+        }
+    } else {
+        WebhookEgressConfig::default()
+    };
+
+    // Stream egress (SSE/WS)
+    let broadcast_capacity = pe.stream.broadcast_capacity.max(1);
+    let he = HttpEgressConfig {
+        enabled: pe.stream.enabled,
+        sse: pe.stream.sse.clone(),
+        websocket: pe.stream.websocket.clone(),
+        ws_heartbeat_secs: pe.stream.ws_heartbeat_secs.max(1),
+        sse_keepalive_secs: pe.stream.sse_keepalive_secs.max(1),
+        ws_max_message_size: 64 * 1024,
+        ws_max_frame_size: 64 * 1024,
+    };
+
+    Ok(EgressConfig {
+        file: fe,
+        sqlite: se,
+        pg: pge,
+        queue: qe,
+        broadcast_capacity,
+        http: he,
+        webhook: we,
+    })
+}
+
+fn build_override_config(pano: &PanoRootConfig) -> OverrideConfig {
+    let chain_override = OverrideChains {
+        assets: pano.overrides.chain.assets,
+    };
+    let chains_enabled = chain_override.assets;
+    let chains = if chains_enabled {
+        Some(chain_override)
+    } else {
+        None
+    };
+
+    OverrideConfig {
+        chains,
+        egress: OverrideEgress {
+            webhook: pano.overrides.egress.webhook,
+            file: pano.overrides.egress.file,
+            pg: pano.overrides.egress.pg,
+            sqlite: pano.overrides.egress.sqlite,
+            queue: pano.overrides.egress.queue,
+            http: pano.overrides.egress.http,
+        },
+    }
+}
+
+/// Extract a filesystem path from a `sqlite://...` URL.
+fn extract_sqlite_path(url: &str) -> String {
+    if let Some(path) = url.strip_prefix("sqlite://") {
+        path.to_string()
+    } else {
+        url.to_string()
     }
 }

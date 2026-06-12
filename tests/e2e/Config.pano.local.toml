@@ -16,7 +16,7 @@
 # ─── Anvil (EVM local chain, chain ID 31337) ─────────────────────────────
 [[chains]]
 caip2            = "eip155:31337"
-start_block      = ${ANVIL_START_BLOCK}
+start_block      = 0
 confirmed_blocks = 1
 rpc              = ["http://host.docker.internal:8545"]
 
@@ -37,7 +37,7 @@ contract = "${USDT_CONTRACT}"
 # ─── Solana local validator ──────────────────────────────────────────────
 [[chains]]
 caip2            = "${SOLANA_GENESIS_HASH}"
-start_block      = ${SOLANA_START_BLOCK}
+start_block      = 0
 confirmed_blocks = 1
 rpc              = ["${SOLANA_RPC_URL}"]
 
@@ -60,7 +60,7 @@ contract = "${USDC_MINT}"
 # ─── Bitcoin Core regtest ────────────────────────────────────────────────
 [[chains]]
 caip2            = "bip122:0f9188f13cb7b2c71f2a335e3a4fc328"
-start_block      = ${BTC_START_BLOCK}
+start_block      = 0
 confirmed_blocks = 1
 rpc              = ["${BTC_RPC_URL}"]
 

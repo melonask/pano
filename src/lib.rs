@@ -39,6 +39,7 @@ pub mod egress;
 pub mod ingress;
 pub mod model;
 pub mod rpc;
+#[cfg(feature = "server")]
 pub mod server;
 pub mod shared;
 
@@ -94,6 +95,7 @@ pub async fn run(config: AppConfig) -> Result<()> {
         });
     }
 
+    #[cfg(feature = "server")]
     if config.server.enabled {
         let addr = format!("{}:{}", config.server.bind, config.server.port);
         let app = server::router::router(detector_handle.clone());
@@ -106,6 +108,18 @@ pub async fn run(config: AppConfig) -> Result<()> {
             .await?;
     } else {
         tracing::info!("HTTP server disabled; running in headless mode");
+        let _ = shutdown_rx.recv().await;
+    }
+
+    #[cfg(not(feature = "server"))]
+    {
+        if config.server.enabled {
+            tracing::warn!(
+                "server.enabled is true but the 'server' feature is not compiled in; running headless"
+            );
+        } else {
+            tracing::info!("HTTP server disabled; running in headless mode");
+        }
         let _ = shutdown_rx.recv().await;
     }
 

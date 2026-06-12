@@ -34,4 +34,4 @@ jobs:
           echo "$PWD/bitcoin-${BTC_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Run e2e test
-        run: cargo test e2e_multichain -- --ignored --nocapture
+        run: cargo test e2e_multichain --features full -- --ignored --nocapture
