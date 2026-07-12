@@ -18,6 +18,8 @@ pub struct HttpIngressConfig {
     pub enabled: bool,
     #[serde(default = "default_addresses_path")]
     pub addresses: String,
+    #[serde(default = "default_max_body_bytes")]
+    pub max_body_bytes: u64,
 }
 
 impl Default for HttpIngressConfig {
@@ -25,12 +27,17 @@ impl Default for HttpIngressConfig {
         Self {
             enabled: false,
             addresses: default_addresses_path(),
+            max_body_bytes: default_max_body_bytes(),
         }
     }
 }
 
 fn default_addresses_path() -> String {
     "addresses".to_string()
+}
+
+fn default_max_body_bytes() -> u64 {
+    1_048_576
 }
 
 // ── HTTP handler functions (only compiled with server feature) ────────────

@@ -67,6 +67,10 @@ impl Default for SqliteEgressColumns {
 }
 
 // ── Implementation (requires sqlite feature) ────────────────────────────
+//
+// Table configuration is an administrative trust boundary. SQLite cannot
+// bind identifiers, so validated table and column identifiers are interpolated
+// below; event values remain bound through sqlx.
 
 #[cfg(feature = "sqlite")]
 mod imp {

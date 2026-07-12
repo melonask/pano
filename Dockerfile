@@ -1,5 +1,5 @@
 # ── Build stage ──────────────────────────────────────────────────────────
-ARG RUST_VERSION=1.96
+ARG RUST_VERSION=1.97
 FROM rust:${RUST_VERSION}-slim-bookworm AS builder
 WORKDIR /app
 
@@ -39,10 +39,10 @@ LABEL org.opencontainers.image.title="Pano" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0" \
       org.opencontainers.image.source="https://github.com/melonask/pano"
 
-# Default config path; override via --config, PANO_CONFIG env, or mount.
+# All commands use this path unless --config is supplied; mount the universal Config.toml here.
 ENV PANO_CONFIG=/etc/pano/Config.toml
 
 EXPOSE 3210
 USER pano
-HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD ["pano", "ping"]
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 CMD ["pano", "healthcheck", "--timeout-secs", "3"]
 ENTRYPOINT ["pano"]

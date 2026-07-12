@@ -413,6 +413,52 @@ confirmations = 12
     assert!(msg.contains("unknown asset"), "got: {msg}");
 }
 
+#[test]
+fn validation_rejects_asset_for_unselected_chain() {
+    let toml = r#"
+[pano]
+chains = ["eth"]
+assets = ["btc"]
+
+[chains.eth]
+caip2 = "eip155:1"
+rpc_urls = ["http://127.0.0.1:8545"]
+confirmations = 12
+
+[chains.btc]
+caip2 = "bip122:000000000019d6689c085ae165831e93"
+rpc_urls = ["http://127.0.0.1:8332"]
+confirmations = 6
+
+[assets.btc]
+chain = "btc"
+symbol = "BTC"
+decimals = 8
+"#;
+    let f = write_temp_toml(toml);
+    let err = AppConfig::load(f.path().to_str().unwrap()).unwrap_err();
+    assert!(format!("{err:#}").contains("not listed in pano.chains"));
+}
+
+#[test]
+fn validation_rejects_sqlite_store_with_wrong_driver() {
+    let toml = format!(
+        r#"{}
+[pano.egress.sqlite]
+enabled = true
+store = "postgres"
+
+[stores.postgres]
+driver = "postgres"
+url = "postgres://localhost/pano"
+"#,
+        MINIMAL_PANO_CONFIG
+    );
+    let f = write_temp_toml(toml);
+    let err = AppConfig::load(f.path().to_str().unwrap()).unwrap_err();
+    assert!(format!("{err:#}").contains("\"sqlite\" is required"));
+}
+
 // ── Shared chain and asset resolution ────────────────────────────────────
 
 #[test]
@@ -511,12 +557,10 @@ path_ref = "my_events"
 [paths.my_watches]
 kind = "file"
 path = "data/test/watches.jsonl"
-format = "jsonl"
 
 [paths.my_events]
 kind = "file"
 path = "data/test/events.jsonl"
-format = "jsonl"
 
 [chains.eth]
 caip2 = "eip155:1"
@@ -537,7 +581,7 @@ decimals = 18
 }
 
 #[test]
-fn shared_path_resolution_direct_path_override() {
+fn config_rejects_direct_file_path_override() {
     let toml = r#"
 [pano]
 chains = ["eth"]
@@ -558,7 +602,6 @@ enabled = false
 [paths.my_watches]
 kind = "file"
 path = "data/test/watches.jsonl"
-format = "jsonl"
 
 [chains.eth]
 caip2 = "eip155:1"
@@ -571,8 +614,26 @@ symbol = "ETH"
 decimals = 18
 "#;
     let f = write_temp_toml(toml);
-    let cfg = AppConfig::load(f.path().to_str().unwrap()).unwrap();
-    assert_eq!(cfg.ingress.file.path, "/override/path.jsonl");
+    let err = AppConfig::load(f.path().to_str().unwrap()).unwrap_err();
+    assert!(format!("{err:#}").contains("unknown field"));
+}
+
+#[test]
+fn config_rejects_unsupported_file_format_and_template() {
+    let configs = [
+        format!(
+            "{MINIMAL_PANO_CONFIG}\n[paths.my_watches]\nkind = \"file\"\npath = \"data/test/watches.jsonl\"\nformat = \"jsonl\""
+        ),
+        MINIMAL_PANO_CONFIG.replace(
+            "[pano.egress.file]\nenabled = false",
+            "[pano.egress.file]\nenabled = false\ntemplate = \"{event}\"",
+        ),
+    ];
+    for toml in configs {
+        let f = write_temp_toml(toml);
+        let err = AppConfig::load(f.path().to_str().unwrap()).unwrap_err();
+        assert!(format!("{err:#}").contains("unknown field"));
+    }
 }
 
 #[test]

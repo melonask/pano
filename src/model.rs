@@ -72,7 +72,7 @@ impl DepositEvent {
         validate_deposit_amount(&data.amount)?;
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         Ok(Self {
-            event_id: Ulid::new().to_string(),
+            event_id: Ulid::r#gen().to_string(),
             event: status.event_name().to_string(),
             version: 1,
             occurred_at: now,

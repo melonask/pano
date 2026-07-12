@@ -1,8 +1,8 @@
 [package]
 name = "pano"
-version = "0.1.2"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97"
 description = "Multi-chain deposit detector — Argos Panoptes sees all"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -15,13 +15,12 @@ name = "pano"
 path = "src/main.rs"
 
 [features]
-# SQLite is the default local persistent integration. Postgres is opt-in via pg.
+# SQLite is the default local persistent integration. PostgreSQL is opt-in.
 default = ["sqlite"]
 server = ["dep:axum", "dep:tower-http", "dep:tower", "dep:tokio-stream", "dep:hmac", "dep:sha2", "dep:aws-lc-rs"]
 webhook = ["dep:hmac", "dep:sha2"]
 sqlite = ["dep:sqlx", "sqlx/sqlite"]
 postgres = ["dep:sqlx", "sqlx/postgres"]
-pg = ["postgres"]
 amqp = ["dep:lapin"]
 full = ["server", "webhook", "sqlite", "postgres", "amqp"]
 
@@ -34,17 +33,17 @@ serde_json = "1"
 toml_edit = { version = "0.25", features = ["serde"] }
 csv = "1"
 async-trait = "0.1"
-hex = "0.4"
+data-encoding = "2"
 rust_decimal = { version = "1.42", features = ["serde"] }
-num-bigint = "0.4"
+num-bigint = "0.5"
 solana-pubkey = { version = "4.2", features = ["curve25519", "sha2"] }
-anyhow = "1"
+anyhow = "1.0.103"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 hashbrown = { version = "0.17", features = ["serde"] }
 indexmap = { version = "2", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-ulid = { version = "1.2", features = ["serde"] }
+ulid = { version = "2.0.1", features = ["serde"] }
 dotenvy = "0.15"
 regex-lite = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -52,7 +51,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # Optional integrations.
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 axum = { version = "0.8", features = ["ws", "macros"], optional = true }
-tower-http = { version = "0.6", features = ["cors", "trace", "fs"], optional = true }
+tower-http = { version = "0.7.0", features = ["cors", "trace", "fs"], optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 lapin = { version = "4.10", optional = true }
 hmac = { version = "0.13", optional = true }
@@ -71,6 +70,3 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal", "
 
 [lints.rust]
 unused_must_use = "deny"
-# Documentation standardization target: add public API docs, then enable
-# `missing_docs = "warn"` to match the strict documentation posture used by
-# crates with complete public item coverage.

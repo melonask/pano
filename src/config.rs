@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -56,21 +54,16 @@ impl_egress_column_refs!(PgEgressColumns);
 
 /// Universal shared configuration parsed from root-level TOML sections.
 /// Pano reads `[chains]`, `[assets]`, `[paths]`, `[transports]`, `[stores]`,
-/// `[http]`, `[log]`, `[meta]`, `[runtime]`, and `[pano]`. Other package
+/// and `[pano]`. Other package
 /// namespaces (`[ladon]`, `[bria]`, `[oracles]`) are silently ignored.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct UniversalConfig {
     version: Option<u64>,
-    meta: Option<MetaConfig>,
-    log: Option<LogConfig>,
-    runtime: Option<RuntimeConfig>,
-    http: Option<HttpConfig>,
     stores: BTreeMap<String, StoreConfig>,
     chains: BTreeMap<String, SharedChainConfig>,
     assets: BTreeMap<String, SharedAssetConfig>,
     paths: BTreeMap<String, PathConfig>,
-    objects: BTreeMap<String, ObjectConfig>,
     transports: TransportConfigs,
     // Package namespace — parsed selectively below.
     pano: Option<PanoRootConfig>,
@@ -78,105 +71,36 @@ struct UniversalConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 struct TransportConfigs {
     amqp: BTreeMap<String, AmqpTransportConfig>,
     webhook: BTreeMap<String, WebhookTransportConfig>,
-    http: BTreeMap<String, HttpTransportConfig>,
 }
 
 // ── Shared root section types ─────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
-struct MetaConfig {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    environment: String,
-    #[serde(default)]
-    data_dir: String,
-    #[serde(default)]
-    profile: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct LogConfig {
-    #[serde(default)]
-    level: String,
-    #[serde(default)]
-    format: String,
-    #[serde(default)]
-    file: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RuntimeConfig {
-    #[serde(default)]
-    worker_threads: u32,
-    #[serde(default)]
-    shutdown_timeout_secs: u64,
-    #[serde(default)]
-    tmp_dir: String,
-    #[serde(default)]
-    max_payload_bytes: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct HttpConfig {
-    #[serde(default)]
-    user_agent: String,
-    #[serde(default)]
-    request_timeout_secs: u64,
-    #[serde(default)]
-    max_retries: u32,
-    #[serde(default)]
-    retry_backoff_ms: u64,
-    #[serde(default)]
-    bind: String,
-    #[serde(default)]
-    prefix: String,
-    #[serde(default)]
-    api_key: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StoreConfig {
-    #[serde(default)]
     driver: String,
-    #[serde(default)]
     url: String,
-    #[serde(default)]
-    migrate: bool,
-    #[serde(default)]
-    connect_timeout_secs: u64,
-    #[serde(default)]
-    max_connections: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SharedChainConfig {
-    #[serde(default)]
-    family: String,
     caip2: String,
-    #[serde(default)]
-    native_symbol: String,
-    #[serde(default)]
     rpc_urls: Vec<String>,
-    #[serde(default)]
     confirmations: u32,
-    #[serde(default)]
-    derivation: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SharedAssetConfig {
     #[serde(default = "default_true")]
     enabled: bool,
     chain: String,
     symbol: String,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    kind: String,
     #[serde(default)]
     contract: Option<String>,
     #[serde(default)]
@@ -184,28 +108,14 @@ struct SharedAssetConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PathConfig {
-    #[serde(default)]
     kind: String,
-    #[serde(default)]
     path: String,
-    #[serde(default)]
-    format: String,
-    #[serde(default)]
-    create_parent_dirs: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ObjectConfig {
-    #[serde(default)]
-    driver: String,
-    #[serde(default)]
-    root: String,
-    #[serde(default)]
-    public_base_url: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AmqpTransportConfig {
     #[serde(default)]
     url: String,
@@ -214,41 +124,16 @@ struct AmqpTransportConfig {
     #[serde(default)]
     password: String,
     #[serde(default)]
-    virtual_host: String,
-    #[serde(default)]
     reconnect_secs: u64,
     #[serde(default)]
     qos_prefetch: u16,
-    #[serde(default)]
-    tls: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WebhookTransportConfig {
     #[serde(default)]
     url: String,
-    #[serde(default)]
-    method: String,
-    #[serde(default)]
-    auth_scheme: String,
-    #[serde(default)]
-    token: String,
-    #[serde(default)]
-    auth_header: String,
-    #[serde(default)]
-    timeout_secs: u64,
-    #[serde(default)]
-    max_retries: u32,
-    #[serde(default)]
-    retry_base_ms: u64,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct HttpTransportConfig {
-    #[serde(default)]
-    base_url: String,
-    #[serde(default)]
-    user_agent: String,
     #[serde(default)]
     timeout_secs: u64,
     #[serde(default)]
@@ -263,10 +148,6 @@ struct HttpTransportConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PanoRootConfig {
-    #[serde(default = "default_true")]
-    enabled: bool,
-    #[serde(default)]
-    store: String,
     #[serde(default)]
     chains: Vec<String>,
     #[serde(default)]
@@ -290,11 +171,11 @@ struct PanoRootConfig {
 struct PanoServerConfig {
     #[serde(default)]
     enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_bind")]
     bind: String,
     #[serde(default = "default_pano_port")]
     port: u16,
-    #[serde(default)]
+    #[serde(default = "default_prefix")]
     prefix: String,
     #[serde(default)]
     api_key: String,
@@ -310,9 +191,9 @@ impl Default for PanoServerConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            bind: String::new(),
+            bind: default_bind(),
             port: default_pano_port(),
-            prefix: String::new(),
+            prefix: default_prefix(),
             api_key: String::new(),
             dashboard_path_ref: String::new(),
             dashboard_export: false,
@@ -464,12 +345,8 @@ struct PanoIngressFileConfig {
     enabled: bool,
     #[serde(default)]
     path_ref: String,
-    #[serde(default)]
-    path: String,
     #[serde(default = "default_file_poll_interval_secs")]
     poll_interval_secs: u64,
-    #[serde(default)]
-    format: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -479,8 +356,6 @@ struct PanoIngressHttpConfig {
     enabled: bool,
     #[serde(default = "default_http_ingress_path")]
     path: String,
-    #[serde(default)]
-    transport: String,
     #[serde(default = "default_http_max_body_bytes")]
     max_body_bytes: u64,
 }
@@ -567,10 +442,6 @@ struct PanoEgressFileConfig {
     enabled: bool,
     #[serde(default)]
     path_ref: String,
-    #[serde(default)]
-    path: String,
-    #[serde(default)]
-    template: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -618,17 +489,9 @@ struct PanoEgressWebhookConfig {
     #[serde(default)]
     transport: String,
     #[serde(default)]
-    url: String,
-    #[serde(default)]
     secret: String,
     #[serde(default = "default_webhook_signature_header")]
     signature_header: String,
-    #[serde(default)]
-    timeout_secs: u64,
-    #[serde(default)]
-    max_retries: u32,
-    #[serde(default)]
-    retry_base_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -648,7 +511,7 @@ struct PanoEgressStreamConfig {
     broadcast_capacity: usize,
 }
 
-// ── Application config (public, preserves existing consumer API) ──────────
+// ── Application config ────────────────────────────────────────────────────
 
 /// Top-level application configuration. This is the runtime config that all
 /// Pano consumers use. It is built from the universal config + `[pano]` namespace.
@@ -1122,10 +985,7 @@ fn default_solana_scan_mode_str() -> String {
 
 // ── Resolution logic ──────────────────────────────────────────────────────
 
-fn resolve_path(cfg: &UniversalConfig, path_ref: &str, direct_path: &str) -> Result<String> {
-    if !direct_path.is_empty() {
-        return Ok(direct_path.to_string());
-    }
+fn resolve_path(cfg: &UniversalConfig, path_ref: &str) -> Result<String> {
     if path_ref.is_empty() {
         return Ok(String::new());
     }
@@ -1214,6 +1074,8 @@ impl AppConfig {
         let pano = universal.pano.as_ref().ok_or_else(|| {
             anyhow::anyhow!("missing [pano] section in config: Pano requires a [pano] namespace with at least chains defined")
         })?;
+
+        validate_namespace_references(&universal, pano)?;
 
         // ── Feature-gate checks ──────────────────────────────────────────
         check_feature_server(&pano.server, &pano.ingress, &pano.egress.stream)?;
@@ -1321,6 +1183,11 @@ impl AppConfig {
     }
 
     /// Validate configuration consistency.
+    ///
+    /// Table and column names cross a trust boundary: SQL drivers cannot bind
+    /// identifiers, so they are interpolated into statements by ingress and
+    /// egress modules. Validation here permits only conservative identifiers
+    /// before any dynamic SQL is constructed.
     fn validate(&self) -> Result<()> {
         if self.chains.is_empty() {
             anyhow::bail!("at least one chain must be configured");
@@ -1523,6 +1390,9 @@ impl AppConfig {
         if self.server.enabled && self.server.port == 0 {
             anyhow::bail!("server.port must be greater than 0");
         }
+        if self.ingress.http.enabled && self.ingress.http.max_body_bytes == 0 {
+            anyhow::bail!("ingress.http.max_body_bytes must be greater than 0");
+        }
         if self.server.dashboard_export && self.server.dashboard.trim().is_empty() {
             anyhow::bail!("server.dashboard is required when server.dashboard_export is true");
         }
@@ -1571,6 +1441,156 @@ impl AppConfig {
 }
 
 // ── Feature-gate checks ───────────────────────────────────────────────────
+
+fn validate_namespace_references(universal: &UniversalConfig, pano: &PanoRootConfig) -> Result<()> {
+    validate_unique_refs("pano.chains", &pano.chains)?;
+    validate_unique_refs("pano.assets", &pano.assets)?;
+
+    if !matches!(
+        pano.rpc_defaults.solana_scan_mode.as_str(),
+        "blocks" | "signatures"
+    ) {
+        anyhow::bail!("pano.rpc_defaults.solana_scan_mode must be \"blocks\" or \"signatures\"");
+    }
+
+    for chain_id in &pano.chains {
+        let chain = universal.chains.get(chain_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "pano.chains references unknown chain \"{chain_id}\": no [chains.{chain_id}] section found"
+            )
+        })?;
+        if chain.caip2.trim().is_empty() {
+            anyhow::bail!("[chains.{chain_id}].caip2 must not be empty");
+        }
+    }
+
+    for asset_id in &pano.assets {
+        let asset = universal.assets.get(asset_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "pano.assets references unknown asset \"{asset_id}\": no [assets.{asset_id}] section found"
+            )
+        })?;
+        if !pano.chains.iter().any(|chain_id| chain_id == &asset.chain) {
+            anyhow::bail!(
+                "pano.assets reference \"{asset_id}\" belongs to chain \"{}\", which is not listed in pano.chains",
+                asset.chain
+            );
+        }
+    }
+
+    validate_enabled_store(
+        universal,
+        pano.ingress.sqlite.enabled,
+        &pano.ingress.sqlite.store,
+        "sqlite",
+        "pano.ingress.sqlite.store",
+    )?;
+    validate_enabled_store(
+        universal,
+        pano.egress.sqlite.enabled,
+        &pano.egress.sqlite.store,
+        "sqlite",
+        "pano.egress.sqlite.store",
+    )?;
+    validate_enabled_store(
+        universal,
+        pano.ingress.pg.enabled,
+        &pano.ingress.pg.store,
+        "postgres",
+        "pano.ingress.pg.store",
+    )?;
+    validate_enabled_store(
+        universal,
+        pano.egress.pg.enabled,
+        &pano.egress.pg.store,
+        "postgres",
+        "pano.egress.pg.store",
+    )?;
+
+    if pano.ingress.file.enabled {
+        validate_file_path_reference(universal, &pano.ingress.file.path_ref, "pano.ingress.file")?;
+    }
+    if pano.egress.file.enabled {
+        validate_file_path_reference(universal, &pano.egress.file.path_ref, "pano.egress.file")?;
+    }
+    if !pano.server.dashboard_path_ref.is_empty() {
+        let path = universal
+            .paths
+            .get(&pano.server.dashboard_path_ref)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown dashboard_path_ref \"{}\": no [paths.{}] section found",
+                    pano.server.dashboard_path_ref,
+                    pano.server.dashboard_path_ref
+                )
+            })?;
+        if path.path.trim().is_empty() {
+            anyhow::bail!(
+                "[paths.{}].path must not be empty",
+                pano.server.dashboard_path_ref
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_unique_refs(context: &str, refs: &[String]) -> Result<()> {
+    let mut seen = std::collections::BTreeSet::new();
+    for reference in refs {
+        if reference.trim().is_empty() {
+            anyhow::bail!("{context} must not contain an empty reference");
+        }
+        if !seen.insert(reference) {
+            anyhow::bail!("{context} contains duplicate reference \"{reference}\"");
+        }
+    }
+    Ok(())
+}
+
+fn validate_enabled_store(
+    universal: &UniversalConfig,
+    enabled: bool,
+    store_id: &str,
+    expected_driver: &str,
+    context: &str,
+) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    let store = universal.stores.get(store_id).ok_or_else(|| {
+        anyhow::anyhow!("unknown store \"{store_id}\" referenced at {context}: no [stores.{store_id}] section found")
+    })?;
+    if store.driver != expected_driver {
+        anyhow::bail!(
+            "store \"{store_id}\" at {context} has driver \"{}\" but \"{expected_driver}\" is required",
+            store.driver
+        );
+    }
+    if store.url.trim().is_empty() {
+        anyhow::bail!("store \"{store_id}\" at {context} has an empty url");
+    }
+    Ok(())
+}
+
+fn validate_file_path_reference(
+    universal: &UniversalConfig,
+    path_ref: &str,
+    context: &str,
+) -> Result<()> {
+    if path_ref.trim().is_empty() {
+        anyhow::bail!("{context} requires path or path_ref referencing [paths.<id>]");
+    }
+    let path = universal.paths.get(path_ref).ok_or_else(|| {
+        anyhow::anyhow!("unknown path_ref \"{path_ref}\": no [paths.{path_ref}] section found")
+    })?;
+    if path.kind != "file" {
+        anyhow::bail!("[paths.{path_ref}].kind must be \"file\" when referenced by {context}");
+    }
+    if path.path.trim().is_empty() {
+        anyhow::bail!("[paths.{path_ref}].path must not be empty when referenced by {context}");
+    }
+    Ok(())
+}
 
 fn check_feature_server(
     server: &PanoServerConfig,
@@ -1628,12 +1648,12 @@ fn check_feature_postgres(
     {
         if ingress_pg.enabled {
             anyhow::bail!(
-                "pano.ingress.pg.enabled requires feature \"pg\" or \"postgres\" (rebuild with --features pg)"
+                "pano.ingress.pg.enabled requires feature \"postgres\" (rebuild with --features postgres)"
             );
         }
         if egress_pg.enabled {
             anyhow::bail!(
-                "pano.egress.pg.enabled requires feature \"pg\" or \"postgres\" (rebuild with --features pg)"
+                "pano.egress.pg.enabled requires feature \"postgres\" (rebuild with --features postgres)"
             );
         }
     }
@@ -1678,46 +1698,20 @@ fn build_server_config(universal: &UniversalConfig, pano: &PanoRootConfig) -> Re
     let s = &pano.server;
     let mut dashboard = String::new();
     if !s.dashboard_path_ref.is_empty() {
-        let path = resolve_path(universal, &s.dashboard_path_ref, "")?;
+        let path = resolve_path(universal, &s.dashboard_path_ref)?;
         dashboard = path;
     }
 
-    let bind = if s.bind.is_empty() {
-        universal
-            .http
-            .as_ref()
-            .map(|h| h.bind.clone())
-            .unwrap_or_default()
-    } else {
-        s.bind.clone()
-    };
-    let prefix = if s.prefix.is_empty() {
-        universal
-            .http
-            .as_ref()
-            .map(|h| h.prefix.clone())
-            .unwrap_or_else(|| "v1".to_string())
-    } else {
-        s.prefix.clone()
-    };
-    let api_key = if s.api_key.is_empty() {
-        universal
-            .http
-            .as_ref()
-            .map(|h| h.api_key.clone())
-            .unwrap_or_default()
-    } else {
-        s.api_key.clone()
-    };
+    let _ = universal;
 
     Ok(ServerConfig {
         enabled: s.enabled,
-        bind,
+        bind: s.bind.clone(),
         port: s.port,
-        prefix,
+        prefix: s.prefix.clone(),
         dashboard,
         dashboard_export: s.dashboard_export,
-        api_key,
+        api_key: s.api_key.clone(),
         shutdown_timeout_secs: s.shutdown_timeout_secs,
     })
 }
@@ -1760,10 +1754,10 @@ fn build_chains(universal: &UniversalConfig, pano: &PanoRootConfig) -> Result<Ve
             retry_base_ms: rpc_defaults.retry_base_ms,
             solana_max_supported_transaction_version: rpc_defaults
                 .solana_max_supported_transaction_version,
-            solana_scan_mode: if rpc_defaults.solana_scan_mode == "signatures" {
-                SolanaScanMode::Signatures
-            } else {
-                SolanaScanMode::Blocks
+            solana_scan_mode: match rpc_defaults.solana_scan_mode.as_str() {
+                "signatures" => SolanaScanMode::Signatures,
+                "blocks" => SolanaScanMode::Blocks,
+                _ => unreachable!("validated before building chain configuration"),
             },
         };
 
@@ -1813,7 +1807,7 @@ fn build_ingress_config(
     let pi = &pano.ingress;
 
     // File ingress
-    let file_path = resolve_path(universal, &pi.file.path_ref, &pi.file.path)?;
+    let file_path = resolve_path(universal, &pi.file.path_ref)?;
     let fi = FileIngressConfig {
         enabled: pi.file.enabled,
         path: file_path,
@@ -1825,6 +1819,7 @@ fn build_ingress_config(
     let hi = HttpIngressConfig {
         enabled: pi.http.enabled,
         addresses: pi.http.path.clone(),
+        max_body_bytes: pi.http.max_body_bytes,
     };
 
     // SQLite ingress
@@ -1833,7 +1828,7 @@ fn build_ingress_config(
             universal,
             &pi.sqlite.store,
             "pano.ingress.sqlite.store",
-            None,
+            Some("sqlite"),
         )?;
         SqliteIngressConfig {
             enabled: true,
@@ -1907,7 +1902,7 @@ fn build_egress_config(universal: &UniversalConfig, pano: &PanoRootConfig) -> Re
     let pe = &pano.egress;
 
     // File egress
-    let file_path = resolve_path(universal, &pe.file.path_ref, &pe.file.path)?;
+    let file_path = resolve_path(universal, &pe.file.path_ref)?;
     let fe = FileEgressConfig {
         enabled: pe.file.enabled,
         path: file_path,
@@ -1919,7 +1914,7 @@ fn build_egress_config(universal: &UniversalConfig, pano: &PanoRootConfig) -> Re
             universal,
             &pe.sqlite.store,
             "pano.egress.sqlite.store",
-            None,
+            Some("sqlite"),
         )?;
         SqliteEgressConfig {
             enabled: true,
@@ -1974,37 +1969,14 @@ fn build_egress_config(universal: &UniversalConfig, pano: &PanoRootConfig) -> Re
     let we = if pe.webhook.enabled {
         let wh =
             resolve_webhook_transport(universal, &pe.webhook.transport, "pano.egress.webhook")?;
-        let url = if pe.webhook.url.is_empty() {
-            wh.url.clone()
-        } else {
-            pe.webhook.url.clone()
-        };
-        let timeout = if pe.webhook.timeout_secs > 0 {
-            pe.webhook.timeout_secs
-        } else {
-            wh.timeout_secs.max(30)
-        };
-        let max_retries = if pe.webhook.max_retries > 0 {
-            pe.webhook.max_retries
-        } else if wh.max_retries > 0 {
-            wh.max_retries
-        } else {
-            3
-        };
-        let retry_base_ms = if pe.webhook.retry_base_ms > 0 {
-            pe.webhook.retry_base_ms
-        } else if wh.retry_base_ms > 0 {
-            wh.retry_base_ms
-        } else {
-            250
-        };
         WebhookEgressConfig {
             enabled: true,
-            url,
+            url: wh.url,
             secret: pe.webhook.secret.clone(),
-            max_retries,
-            retry_base_ms,
-            timeout_secs: timeout,
+            signature_header: pe.webhook.signature_header.clone(),
+            max_retries: wh.max_retries,
+            retry_base_ms: wh.retry_base_ms,
+            timeout_secs: wh.timeout_secs,
         }
     } else {
         WebhookEgressConfig::default()

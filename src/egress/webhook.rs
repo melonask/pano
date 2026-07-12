@@ -8,6 +8,8 @@ pub struct WebhookEgressConfig {
     pub enabled: bool,
     pub url: String,
     pub secret: String,
+    /// HTTP header carrying the HMAC-SHA256 signature.
+    pub signature_header: String,
     /// Number of retry rounds after the initial delivery attempt.
     pub max_retries: u32,
     /// Base retry delay in milliseconds (doubled each attempt).
@@ -22,6 +24,7 @@ impl Default for WebhookEgressConfig {
             enabled: false,
             url: String::new(),
             secret: String::new(),
+            signature_header: "X-Pano-Signature".to_string(),
             max_retries: 3,
             retry_base_ms: 250,
             timeout_secs: 30,
@@ -102,7 +105,7 @@ mod imp {
             .header("X-Pano-Event", &event.event);
         if !secret.is_empty() {
             let signature = compute_hmac(secret, &payload)?;
-            request = request.header("X-Pano-Signature", signature);
+            request = request.header(&config.signature_header, signature);
         }
         deliver_with_retry(request, payload, event, config).await
     }
@@ -152,7 +155,7 @@ mod imp {
         mac.update(data.as_bytes());
         let result = mac.finalize();
         let code_bytes = result.into_bytes();
-        Ok(hex::encode(code_bytes))
+        Ok(data_encoding::HEXLOWER.encode(&code_bytes))
     }
 }
 

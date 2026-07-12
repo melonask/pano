@@ -74,7 +74,7 @@ services:
     ports:
       - "3210:3210"
     healthcheck:
-      test: ["CMD", "pano", "ping"]
+      test: ["CMD", "pano", "healthcheck", "--timeout-secs", "3"]
       interval: 1s
       timeout: 3s
       retries: 30

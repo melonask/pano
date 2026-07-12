@@ -67,6 +67,10 @@ impl Default for PgEgressColumns {
 }
 
 // ── Implementation (requires postgres feature) ──────────────────────────
+//
+// Table configuration is an administrative trust boundary. PostgreSQL does
+// not support bound identifiers, so validated table and column identifiers
+// are interpolated below; event values remain bound through sqlx.
 
 #[cfg(feature = "postgres")]
 mod imp {

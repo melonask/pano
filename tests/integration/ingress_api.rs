@@ -15,6 +15,7 @@ use tower::ServiceExt;
 // ── Path constants (default config: prefix=v1, addresses=addresses) ──────
 
 const WATCH_PATH: &str = "/v1/addresses";
+const HEALTH_PATH: &str = "/healthz";
 // EVM addresses are normalized to lowercase by normalize_address_key.
 const RAW_ADDR: &str = "0xAbCdEf1234567890AbCdEf1234567890AbCdEf12";
 const NORM_ADDR: &str = "0xabcdef1234567890abcdef1234567890abcdef12";
@@ -52,6 +53,7 @@ fn test_config() -> AppConfig {
             http: HttpIngressConfig {
                 enabled: true,
                 addresses: "addresses".into(),
+                max_body_bytes: 1_048_576,
             },
             ..Default::default()
         },
@@ -100,6 +102,30 @@ fn test_handle(config: AppConfig) -> (DetectorHandle, mpsc::Receiver<Command>) {
 /// Prevents channel backpressure from blocking the handler.
 fn drain_commands(mut rx: mpsc::Receiver<Command>) {
     tokio::spawn(async move { while rx.recv().await.is_some() {} });
+}
+
+#[tokio::test]
+async fn health_reports_detector_command_loop_liveness() {
+    let (handle, command_rx) = test_handle(test_config());
+    let app = router(handle);
+    let response = app
+        .oneshot(Request::get(HEALTH_PATH).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    drop(command_rx);
+}
+
+#[tokio::test]
+async fn health_requires_internal_api_key_when_configured() {
+    let (handle, _command_rx) = test_handle(test_config_with_api_key());
+    let app = router(handle);
+    let response = app
+        .oneshot(Request::get(HEALTH_PATH).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 // ── Test 1: POST with valid WatchSpec returns 201 ────────────────────────

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use pano::config::{AssetConfig, ChainConfig, RpcOptions};
 use pano::model::{DepositData, DepositEvent, ResolvedAsset, TargetMap};
 

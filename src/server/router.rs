@@ -1,6 +1,6 @@
 use crate::detector::DetectorHandle;
 use crate::server::error::ApiError;
-use axum::extract::Request;
+use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::middleware::Next;
@@ -14,6 +14,7 @@ use tower_http::trace::TraceLayer;
 /// Build the Axum router with all HTTP routes.
 pub fn router(handle: DetectorHandle) -> Router {
     let cfg = handle.config.clone();
+    let health_handle = handle.clone();
     let mut app = Router::new();
 
     if cfg.ingress.http.enabled && !cfg.ingress.http.addresses.trim().is_empty() {
@@ -23,7 +24,10 @@ pub fn router(handle: DetectorHandle) -> Router {
             .route(
                 &format!("{addresses}/{{address}}"),
                 delete(crate::ingress::api::remove_address),
-            );
+            )
+            .layer(DefaultBodyLimit::max(
+                cfg.ingress.http.max_body_bytes.min(usize::MAX as u64) as usize,
+            ));
     }
     if cfg.egress.http.enabled && !cfg.egress.http.sse.trim().is_empty() {
         app = app.route(
@@ -48,6 +52,7 @@ pub fn router(handle: DetectorHandle) -> Router {
     } else {
         Router::new().nest(&format!("/{prefix}"), app)
     };
+    root = root.route("/healthz", get(move || health(health_handle.clone())));
 
     if !cfg.server.dashboard.trim().is_empty() {
         let dashboard_route = if prefix.is_empty() {
@@ -72,6 +77,16 @@ pub fn router(handle: DetectorHandle) -> Router {
     ));
 
     root.layer(TraceLayer::new_for_http())
+}
+
+/// Internal liveness endpoint for orchestrators. A successful response proves
+/// that the HTTP server is accepting work and the detector command loop is live.
+pub async fn health(handle: DetectorHandle) -> StatusCode {
+    if handle.cmd_tx.is_closed() {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::NO_CONTENT
+    }
 }
 
 async fn require_api_key(

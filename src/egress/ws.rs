@@ -25,16 +25,16 @@ pub struct HttpEgressConfig {
 }
 
 fn default_sse_path() -> String {
-    "sse".to_string()
+    "events".to_string()
 }
 fn default_websocket_path() -> String {
     "ws".to_string()
 }
 fn default_ws_heartbeat_secs() -> u64 {
-    30
+    15
 }
 fn default_sse_keepalive_secs() -> u64 {
-    5
+    15
 }
 fn default_ws_max_message_size() -> usize {
     64 * 1024

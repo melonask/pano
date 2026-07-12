@@ -427,11 +427,11 @@ pub fn start_with_tasks(
                                     .map(|rw| rw.confirmed_blocks)
                                     .unwrap_or(chain_cfg.confirmed_blocks);
                                 if confirmations >= required_confs {
-                                    let confirmed = match DepositEvent::confirmed_from(&unconfirmed_events[i], confirmations) {
+                                    let detected = unconfirmed_events.swap_remove(i);
+                                    let confirmed = match DepositEvent::confirmed_from(&detected, confirmations) {
                                         Ok(event) => event,
                                         Err(error) => {
-                                            tracing::error!(%error, event_id = %unconfirmed_events[i].event_id, "invalid confirmed deposit event");
-                                            unconfirmed_events.swap_remove(i);
+                                            tracing::error!(%error, event_id = %detected.event_id, "invalid confirmed deposit event");
                                             continue;
                                         }
                                     };
@@ -447,7 +447,6 @@ pub fn start_with_tasks(
                                             enqueue_delivery(&delivery_tx, &confirmed);
                                         }
                                     }
-                                    unconfirmed_events.swap_remove(i);
                                     continue;
                                 }
                                 let evict_threshold = u64::from(required_confs)
@@ -558,61 +557,68 @@ pub fn resolve_watch_spec_to_watches(
     config: &AppConfig,
     spec: &WatchSpec,
 ) -> Result<Vec<ResolvedWatch>> {
-    // ── Structural check ──────────────────────────────────────────────
+    validate_watch_spec(config, spec)?;
+
+    if spec.chains.is_empty() {
+        return resolve_shorthand_watch(config, spec);
+    }
+
+    resolve_chain_watches(config, spec)
+}
+
+/// Validate request-level invariants before any expansion can mutate state.
+fn validate_watch_spec(config: &AppConfig, spec: &WatchSpec) -> Result<()> {
     if spec.address.is_none() && spec.chains.is_empty() {
         anyhow::bail!("at least one of 'address' or 'chains' must be present");
     }
 
-    // ── Chain / egress override gate ──────────────────────────────────
     if !spec.chains.is_empty() && config.override_.chains.is_none() {
         anyhow::bail!(
             "WatchSpec contains 'chains', but [override.chains] is not enabled in server config; remove 'chains' from the watch spec or add [override.chains] (for example: assets = true) to allow per-watch chain overrides"
         );
     }
-    validate_egress_override(&config.override_, &spec.egress)?;
+    validate_egress_override(&config.override_, &spec.egress)
+}
 
-    // ── Shorthand expansion (no chains array) ─────────────────────────
-    if spec.chains.is_empty() {
-        let root_addr = spec
-            .address
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("address is required when chains is empty"))?;
-        let root_addr = normalize_address_key(root_addr);
+/// Expand an address-only request across compatible configured chains and assets.
+fn resolve_shorthand_watch(config: &AppConfig, spec: &WatchSpec) -> Result<Vec<ResolvedWatch>> {
+    let root_addr = spec
+        .address
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("address is required when chains is empty"))?;
+    let root_addr = normalize_address_key(root_addr);
 
-        let mut resolved = Vec::new();
-        for chain in &config.chains {
-            let kind = ChainKind::from_caip2(&chain.caip2)
-                .ok_or_else(|| anyhow::anyhow!("unsupported chain: {}", chain.caip2))?;
-            if validate_address_for_chain(kind, &root_addr) {
-                for asset in &chain.assets {
-                    validated_asset_min_amount(
-                        asset.symbol.as_str(),
-                        &chain.caip2,
-                        &asset.min_amount,
-                    )?;
-                    resolved.push(ResolvedWatch {
-                        address: root_addr.clone(),
-                        caip2: chain.caip2.clone(),
-                        symbol: asset.symbol.clone(),
-                        contract: asset.contract.clone(),
-                        token_program: asset.token_program.clone(),
-                        decimals: Some(asset.decimals),
-                        start_block: chain.start_block,
-                        end_block: chain.end_block,
-                        confirmed_blocks: chain.confirmed_blocks,
-                        min_amount: asset.min_amount.clone(),
-                        egress: spec.egress.clone(),
-                    });
-                }
+    let mut resolved = Vec::new();
+    for chain in &config.chains {
+        let kind = ChainKind::from_caip2(&chain.caip2)
+            .ok_or_else(|| anyhow::anyhow!("unsupported chain: {}", chain.caip2))?;
+        if validate_address_for_chain(kind, &root_addr) {
+            for asset in &chain.assets {
+                validated_asset_min_amount(asset.symbol.as_str(), &chain.caip2, &asset.min_amount)?;
+                resolved.push(ResolvedWatch {
+                    address: root_addr.clone(),
+                    caip2: chain.caip2.clone(),
+                    symbol: asset.symbol.clone(),
+                    contract: asset.contract.clone(),
+                    token_program: asset.token_program.clone(),
+                    decimals: Some(asset.decimals),
+                    start_block: chain.start_block,
+                    end_block: chain.end_block,
+                    confirmed_blocks: chain.confirmed_blocks,
+                    min_amount: asset.min_amount.clone(),
+                    egress: spec.egress.clone(),
+                });
             }
         }
-        if resolved.is_empty() {
-            anyhow::bail!("address does not match any configured chain type");
-        }
-        return Ok(resolved);
     }
+    if resolved.is_empty() {
+        anyhow::bail!("address does not match any configured chain type");
+    }
+    Ok(resolved)
+}
 
-    // ── Chain-based expansion ─────────────────────────────────────────
+/// Resolve explicit chain entries, including permitted asset overrides.
+fn resolve_chain_watches(config: &AppConfig, spec: &WatchSpec) -> Result<Vec<ResolvedWatch>> {
     let assets_allowed = config
         .override_
         .chains

@@ -28,7 +28,8 @@ assets = ["eth"]
 
 # ── Server (requires --features server) ──────────────────────────────────────
 [pano.server]
-# Whether Pano should start its HTTP server. Requires feature "server".
+# Whether Pano should start its internal HTTP integration server. Requires feature "server".
+# Do not publish this port: Artur is the sole public gateway/security/payment owner.
 enabled = false
 
 # Bind address.
@@ -40,7 +41,8 @@ port = 3210
 # URL prefix for all API routes.
 prefix = "v1"
 
-# Optional shared API key. When non-empty, all HTTP routes require either
+# Optional internal-hop API key. This is defense in depth, not a public gateway.
+# When non-empty, all HTTP routes require either
 #   Authorization: Bearer <key>
 #   X-Pano-API-Key: <key>
 api_key = ""
@@ -115,15 +117,12 @@ command_queue_capacity = 4096
 enabled = true
 # Path profile from [paths]. File parsing semantics remain Pano-specific.
 path_ref = "pano_watches"
-# Direct path override. Empty means resolve path_ref.
-path = ""
 poll_interval_secs = 2
 
 [pano.ingress.http]
 # Requires --features server.
 enabled = false
 path = "watch"
-transport = "default"
 max_body_bytes = 1048576
 
 [pano.ingress.sqlite]
@@ -134,7 +133,7 @@ poll_interval_secs = 5
 table = "watched_addresses"
 
 [pano.ingress.pg]
-# Requires --features pg or --features postgres.
+# Requires --features postgres.
 enabled = false
 store = "postgres"
 poll_interval_secs = 5
@@ -153,8 +152,6 @@ qos_prefetch = 0
 [pano.egress.file]
 enabled = true
 path_ref = "pano_events"
-path = ""
-template = ""
 
 [pano.egress.sqlite]
 # Requires --features sqlite (enabled by default).
@@ -163,7 +160,7 @@ store = "pano"
 table = "deposit_events"
 
 [pano.egress.pg]
-# Requires --features pg or --features postgres.
+# Requires --features postgres.
 enabled = false
 store = "postgres"
 table = "deposit_events"
@@ -180,12 +177,8 @@ confirmed_routing_key = "deposit.confirmed"
 # Requires --features webhook.
 enabled = false
 transport = "ops"
-url = ""
 secret = "${PANO_WEBHOOK_SECRET:-}"
 signature_header = "X-Pano-Signature"
-timeout_secs = 0
-max_retries = 0
-retry_base_ms = 0
 
 [pano.egress.stream]
 # SSE/WebSocket event stream. Requires --features server and pano.server.enabled = true.
@@ -202,9 +195,7 @@ broadcast_capacity = 1024
 
 # ── Chains: shared chain identity ────────────────────────────────────────────
 [chains.eth]
-family = "evm"
 caip2 = "eip155:1"
-native_symbol = "ETH"
 rpc_urls = ["https://eth.llamarpc.com"]
 confirmations = 12
 
@@ -213,30 +204,21 @@ confirmations = 12
 enabled = true
 chain = "eth"
 symbol = "ETH"
-name = "Ether"
-kind = "native"
 decimals = 18
 
 # ── Stores: durable database profiles ────────────────────────────────────────
 [stores.pano]
 driver = "sqlite"
 url = "sqlite://data/pano/pano.db"
-migrate = true
-connect_timeout_secs = 10
-max_connections = 1
 
 # ── Paths: shared file locations ─────────────────────────────────────────────
 [paths.pano_watches]
 kind = "file"
 path = "data/pano/addresses.jsonl"
-format = "jsonl"
-create_parent_dirs = true
 
 [paths.pano_events]
 kind = "file"
 path = "data/pano/deposits.jsonl"
-format = "jsonl"
-create_parent_dirs = true
 
 # ── Transport profiles: shared connection defaults ───────────────────────────
 # Reference these from [pano.ingress.amqp], [pano.egress.amqp],
@@ -247,16 +229,11 @@ create_parent_dirs = true
 url = "amqp://localhost:5672"
 username = ""
 password = "${AMQP_PASSWORD:-}"
-virtual_host = "/"
 reconnect_secs = 5
 qos_prefetch = 100
 
 [transports.webhook.ops]
 url = "${OPS_WEBHOOK_URL:-}"
-method = "POST"
-auth_scheme = "bearer"
-token = "${OPS_WEBHOOK_TOKEN:-}"
-auth_header = "Authorization"
 timeout_secs = 10
 max_retries = 3
 retry_base_ms = 500

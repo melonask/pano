@@ -1,0 +1,12 @@
+{
+  "name": "pano-docs",
+  "private": true,
+  "version": "0.3.0",
+  "scripts": {
+    "build": "vitepress build",
+    "dev": "vitepress dev"
+  },
+  "devDependencies": {
+    "vitepress": "2.0.0-alpha.18"
+  }
+}

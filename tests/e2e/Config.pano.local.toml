@@ -1,94 +1,74 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Pano — Multi-chain deposit detector configuration (e2e)
-# ─────────────────────────────────────────────────────────────────────────────
-# External non-containerised chains are expected at host.docker.internal:
-#   Anvil (EVM)              → http://host.docker.internal:8545
-#   Solana test validator    → ${SOLANA_RPC_URL}
-#   Bitcoin Core regtest     → http://host.docker.internal:18443
-#
-# The Solana genesis hash and Bitcoin RPC credentials are injected via
-# environment variables (see docker-compose.e2e.yml). BTC_RPC_URL embeds regtest
-# credentials for this local demo; they are visible in container inspection.
-# ─────────────────────────────────────────────────────────────────────────────
+version = 1
 
-# ── Chains ───────────────────────────────────────────────────────────────
+[chains.anvil]
+family = "evm"
+caip2 = "eip155:31337"
+rpc_urls = ["http://host.docker.internal:8545"]
+confirmations = 1
 
-# ─── Anvil (EVM local chain, chain ID 31337) ─────────────────────────────
-[[chains]]
-caip2            = "eip155:31337"
-start_block      = 0
-confirmed_blocks = 1
-rpc              = ["http://host.docker.internal:8545"]
+[chains.solana]
+family = "solana"
+caip2 = "${SOLANA_GENESIS_HASH}"
+rpc_urls = ["${SOLANA_RPC_URL}"]
+confirmations = 1
 
-[chains.rpc_options]
-batch_size               = 50
-scan_interval_secs       = 1
-max_native_scan_per_cycle = 20
+[chains.bitcoin]
+family = "bitcoin"
+caip2 = "bip122:0f9188f13cb7b2c71f2a335e3a4fc328"
+rpc_urls = ["${BTC_RPC_URL}"]
+confirmations = 1
 
-[[chains.assets]]
-symbol   = "ETH"
+[assets.eth]
+chain = "anvil"
+symbol = "ETH"
 decimals = 18
 
-[[chains.assets]]
-symbol   = "USDT"
-decimals = 6
+[assets.usdt]
+chain = "anvil"
+symbol = "USDT"
 contract = "${USDT_CONTRACT}"
+decimals = 6
 
-# ─── Solana local validator ──────────────────────────────────────────────
-[[chains]]
-caip2            = "${SOLANA_GENESIS_HASH}"
-start_block      = 0
-confirmed_blocks = 1
-rpc              = ["${SOLANA_RPC_URL}"]
-
-[chains.rpc_options]
-batch_size           = 50
-scan_interval_secs   = 1
-scan_lookback_blocks = 500
-max_retries          = 5
-retry_base_ms        = 200
-
-[[chains.assets]]
-symbol   = "SOL"
+[assets.sol]
+chain = "solana"
+symbol = "SOL"
 decimals = 9
 
-[[chains.assets]]
-symbol   = "USDC"
-decimals = 6
+[assets.usdc]
+chain = "solana"
+symbol = "USDC"
 contract = "${USDC_MINT}"
+decimals = 6
 
-# ─── Bitcoin Core regtest ────────────────────────────────────────────────
-[[chains]]
-caip2            = "bip122:0f9188f13cb7b2c71f2a335e3a4fc328"
-start_block      = 0
-confirmed_blocks = 1
-rpc              = ["${BTC_RPC_URL}"]
-
-[chains.rpc_options]
-batch_size           = 50
-scan_interval_secs   = 1
-scan_lookback_blocks = 30
-
-[[chains.assets]]
-symbol   = "BTC"
+[assets.btc]
+chain = "bitcoin"
+symbol = "BTC"
 decimals = 8
 
-# ── Override — Controls which WatchSpec fields callers may override ───────────
-[override]
+[stores.pano]
+driver = "postgres"
+url = "postgres://pano:panopass@postgres:5432/pano"
 
-[override.chains]
-# Default: false (must be explicitly enabled for per-watch asset overrides)
-assets = false
+[pano]
+chains = ["anvil", "solana", "bitcoin"]
+assets = ["eth", "usdt", "sol", "usdc", "btc"]
 
-# ── Ingress — PostgreSQL (read watched addresses from shared table) ──────
+[pano.server]
+enabled = true
 
-[ingress.pg]
-enabled            = true
-url                = "postgres://pano:panopass@postgres:5432/pano"
+[pano.rpc_defaults]
+batch_size = 50
+scan_interval_secs = 1
+scan_lookback_blocks = 30
+max_native_scan_per_cycle = 20
+max_retries = 5
+retry_base_ms = 200
+
+[pano.ingress.pg]
+enabled = true
+store = "pano"
 poll_interval_secs = 1
 
-# ── Egress — PostgreSQL (write deposit events) ───────────────────────────
-
-[egress.pg]
+[pano.egress.pg]
 enabled = true
-url     = "postgres://pano:panopass@postgres:5432/pano"
+store = "pano"

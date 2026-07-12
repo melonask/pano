@@ -63,6 +63,10 @@ impl Default for SqliteIngressColumns {
 }
 
 // ── Implementation (requires sqlite feature) ────────────────────────────
+//
+// Table configuration is an administrative trust boundary. SQLite cannot
+// bind identifiers, so validated table and column identifiers are interpolated
+// below; watch data is decoded rather than embedded in SQL.
 
 #[cfg(feature = "sqlite")]
 mod imp {
