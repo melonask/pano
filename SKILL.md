@@ -50,7 +50,7 @@ COMMAND:
 | `pano check` | Prints `configuration is valid` | Validates config/profile/feature/SQL identifier constraints without scanners/RPC; 0 on success |
 | `pano healthcheck` | `--timeout-secs 3`; prints `healthy` | GETs local `/healthz`, adding configured API key; succeeds only on 204; timeout must be >0 |
 
-`--config` is a top-level option and must precede the subcommand; use `pano --config Config.toml check`.
+`--config` works before or after a subcommand; prefer top-level-first: `pano --config Config.toml check`. `pano check --config Config.toml` is also accepted.
 
 ## Configuration and override gates
 
@@ -124,4 +124,6 @@ Correct 4xx request, authorization, configuration, or feature errors before retr
 - [ ] Durable egress exists where loss matters; consumers persist and deduplicate both lifecycle events by `event_id`.
 - [ ] Internal server is private; authentication is tested; `/healthz` returns 204 only after startup.
 - [ ] RPC/provider limits, bounded queues/retries, stream lag, scanner errors, and durable delivery failures are monitored.
-- [ ] Relevant tests pass: `cargo test` (and `cargo test --features full` when applicable).
+- [ ] Formatting passes: `cargo fmt --all -- --check`.
+- [ ] Linting passes: `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+- [ ] Tests pass: `cargo test --all-targets --all-features --locked`.

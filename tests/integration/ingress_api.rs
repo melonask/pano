@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 use tower::ServiceExt;
 
-// ── Path constants (default config: prefix=v1, addresses=addresses) ──────
+// ── Path constants (test config overrides the default watch path) ─────────
 
 const WATCH_PATH: &str = "/v1/addresses";
 const HEALTH_PATH: &str = "/healthz";

@@ -14,7 +14,12 @@ struct Args {
     command: Option<Command>,
 
     /// Path to configuration file
-    #[arg(long, env = "PANO_CONFIG", default_value = "Config.toml")]
+    #[arg(
+        long,
+        global = true,
+        env = "PANO_CONFIG",
+        default_value = "Config.toml"
+    )]
     config: String,
 }
 

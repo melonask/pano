@@ -3,12 +3,12 @@
 ## CLI
 
 ```bash
-pano check --config Config.toml
-pano healthcheck --config Config.toml --timeout-secs 3
+pano --config Config.toml check
+pano --config Config.toml healthcheck --timeout-secs 3
 pano --config Config.toml
 ```
 
-`check` validates universal references, package configuration, SQL identifier constraints, and enabled feature gates. `healthcheck` requests the configured internal `/healthz` endpoint; it is appropriate for container health checks.
+`--config` works before or after a subcommand; examples use the preferred top-level-first form. `check` validates universal references, package configuration, SQL identifier constraints, and enabled feature gates. `healthcheck` requests the configured internal `/healthz` endpoint; it is appropriate for container health checks.
 
 ## Internal HTTP API
 

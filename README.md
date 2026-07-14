@@ -77,7 +77,7 @@ COMMAND:
 | `check` | Loads and validates configuration, profile references, SQL identifiers, and compiled feature gates; does not start scanners or contact RPC | `configuration is valid` | 0 on valid config; non-zero otherwise |
 | `healthcheck` | GETs the local configured `/healthz` endpoint | `healthy` | 0 only for HTTP 204; non-zero for disabled server, timeout, connection error, or another status |
 
-`--config` is a top-level option: place it before the subcommand, for example `pano --config Config.toml check` or `pano --config Config.toml healthcheck --timeout-secs 3`. It defaults to `Config.toml` and is also set by `PANO_CONFIG`. `--timeout-secs` is available only to `healthcheck`, defaults to `3`, and must be greater than zero. Pano loads `.env` when present. `${VAR}` requires an environment value; `${VAR:-default}` supplies a literal default. Configuration, validation, and command errors are reported on stderr and result in a non-zero exit.
+`--config` works before or after a subcommand; prefer top-level-first, for example `pano --config Config.toml check` (also accepted: `pano check --config Config.toml`). It defaults to `Config.toml` and is also set by `PANO_CONFIG`. `--timeout-secs` is available only to `healthcheck`, defaults to `3`, and must be greater than zero. Pano loads `.env` when present. `${VAR}` requires an environment value; `${VAR:-default}` supplies a literal default. Configuration, validation, and command errors are reported on stderr and result in a non-zero exit.
 
 ## Configuration model
 
@@ -211,8 +211,9 @@ RPC gaps, provider pruning, reorgs, process restarts, bounded dedup eviction, an
 ## Development and tests
 
 ```bash
-cargo test
-cargo test --features full
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --all-features --locked
 ```
 
 Integration coverage exercises configuration, scanners, ingress, egress, delivery, and HTTP behavior. End-to-end scenarios require their local chain tooling (Anvil, Solana test validator, Bitcoin Core regtest) and Docker/Compose prerequisites where applicable. Test native and token deposits, confirmation transitions, watch add/remove, durable egress, and graceful shutdown.

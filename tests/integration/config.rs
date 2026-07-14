@@ -128,6 +128,12 @@ fn config_load_happy_path() {
 }
 
 #[test]
+fn standalone_defaults_match_documented_ingress_and_solana_defaults() {
+    assert_eq!(SolanaScanMode::default(), SolanaScanMode::Blocks);
+    assert_eq!(HttpIngressConfig::default().addresses, "watch");
+}
+
+#[test]
 #[serial(env)]
 fn config_propagates_shared_scan_bounds_and_token_programs() {
     unsafe {

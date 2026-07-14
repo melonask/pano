@@ -4,7 +4,6 @@ Pano uses universal root profiles plus a `[pano]` namespace. Root profiles can b
 
 ```toml
 [chains.ethereum]
-family = "evm"
 caip2 = "eip155:1"
 rpc_urls = ["${ETH_RPC_URL}"]
 confirmations = 12

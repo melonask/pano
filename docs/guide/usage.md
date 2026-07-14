@@ -3,7 +3,7 @@
 Run the detector after checking configuration:
 
 ```bash
-pano check --config Config.toml
+pano --config Config.toml check
 pano --config Config.toml
 ```
 
@@ -17,4 +17,4 @@ curl -X POST http://127.0.0.1:3210/v1/watch \
 
 The detector expands a compatible address across configured chains and assets. To provide chain or asset overrides, enable the corresponding `[pano.overrides]` gate first. Duplicate detected and confirmed events are independently deduplicated; confirmed events are emitted after the watch's required confirmation count.
 
-Use `GET /healthz` or `pano healthcheck --config Config.toml` for liveness. Healthcheck requires the internal server to be enabled and returns success only for HTTP `204 No Content`.
+Use `GET /healthz` or `pano --config Config.toml healthcheck` for liveness. `--config` works before or after a subcommand; examples use the preferred top-level-first form. Healthcheck requires the internal server to be enabled and returns success only for HTTP `204 No Content`.

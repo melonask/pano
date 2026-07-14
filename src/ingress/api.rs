@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 pub struct HttpIngressConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_addresses_path")]
+    #[serde(default = "default_watch_path")]
     pub addresses: String,
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: u64,
@@ -26,14 +26,14 @@ impl Default for HttpIngressConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            addresses: default_addresses_path(),
+            addresses: default_watch_path(),
             max_body_bytes: default_max_body_bytes(),
         }
     }
 }
 
-fn default_addresses_path() -> String {
-    "addresses".to_string()
+fn default_watch_path() -> String {
+    "watch".to_string()
 }
 
 fn default_max_body_bytes() -> u64 {
@@ -49,7 +49,7 @@ pub async fn not_found() -> ApiError {
 }
 
 #[cfg(feature = "server")]
-/// POST /v1/addresses — Add a new address watch.
+/// POST /v1/watch — Add a new address watch.
 ///
 /// Resolves and validates before enqueueing the mutation for the detector loop.
 pub async fn add_address(
@@ -96,7 +96,7 @@ pub async fn add_address(
 }
 
 #[cfg(feature = "server")]
-/// DELETE /v1/addresses/{address} — Remove a watched address (all triads).
+/// DELETE /v1/watch/{address} — Remove a watched address (all triads).
 pub async fn remove_address(
     State(handle): State<DetectorHandle>,
     Path(raw_address): Path<String>,

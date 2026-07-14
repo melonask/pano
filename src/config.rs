@@ -373,7 +373,7 @@ struct PanoIngressSqliteConfig {
     enabled: bool,
     #[serde(default)]
     store: String,
-    #[serde(default = "default_sqlite_poll_interval_secs")]
+    #[serde(default = "default_store_poll_interval_secs")]
     poll_interval_secs: u64,
     #[serde(default = "default_watched_table")]
     table: String,
@@ -386,7 +386,7 @@ struct PanoIngressPgConfig {
     enabled: bool,
     #[serde(default)]
     store: String,
-    #[serde(default = "default_sqlite_poll_interval_secs")]
+    #[serde(default = "default_store_poll_interval_secs")]
     poll_interval_secs: u64,
     #[serde(default = "default_watched_table")]
     table: String,
@@ -730,11 +730,11 @@ pub struct RpcOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SolanaScanMode {
-    /// Per-address getSignaturesForAddress + getTransaction (current behaviour).
-    #[default]
+    /// Per-address getSignaturesForAddress + getTransaction.
     Signatures,
     /// Per-slot getBlock with transactionDetails=full. No dependency on RPC
     /// signature indexing. One RPC call per slot regardless of watched address count.
+    #[default]
     Blocks,
 }
 
@@ -958,7 +958,7 @@ fn default_http_ingress_path() -> String {
 fn default_http_max_body_bytes() -> u64 {
     1_048_576
 }
-fn default_sqlite_poll_interval_secs() -> u64 {
+fn default_store_poll_interval_secs() -> u64 {
     5
 }
 fn default_watched_table() -> String {

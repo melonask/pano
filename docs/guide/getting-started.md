@@ -5,7 +5,7 @@ Install Pano and copy the example configuration:
 ```bash
 cargo install pano
 cp Config.example.toml Config.toml
-pano check --config Config.toml
+pano --config Config.toml check
 pano --config Config.toml
 ```
 

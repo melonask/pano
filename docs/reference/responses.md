@@ -31,7 +31,7 @@ HTTP ingress returns standard API errors. Invalid JSON or an invalid watch produ
 
 ```json
 {
-  "error": "invalid_request",
+  "error": "bad_request",
   "message": "address is required when chains is empty"
 }
 ```

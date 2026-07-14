@@ -119,6 +119,7 @@ command_queue_capacity = 4096
 enabled = true
 # Path profile from [paths]. File parsing semantics remain Pano-specific.
 path_ref = "pano_watches"
+# Example override; the default file polling interval is 5 seconds.
 poll_interval_secs = 2
 
 [pano.ingress.http]
@@ -248,4 +249,5 @@ qos_prefetch = 100
 url = "${OPS_WEBHOOK_URL:-}"
 timeout_secs = 10
 max_retries = 3
+# Example override; the webhook retry base default is 250 milliseconds.
 retry_base_ms = 500
