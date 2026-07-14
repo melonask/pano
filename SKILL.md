@@ -1,303 +1,127 @@
 ---
 name: pano
-description: Use when configuring, operating, integrating, troubleshooting, testing, or deploying Pano’s EVM, Bitcoin, or Solana deposit-detection service, including watches, scanners, normalized deposit events, ingress/egress adapters, RPC behavior, and its internal HTTP API.
+description: Use when configuring, operating, integrating, troubleshooting, testing, or deploying Pano’s EVM, Bitcoin, or Solana deposit detector, including watches, scanners, normalized deposit events, ingress/egress adapters, RPC behavior, and its internal HTTP API.
 ---
 
 # Pano operations and integration guide
 
-## Purpose and boundary
+## Purpose and boundaries
 
-Pano detects deposits on configured EVM, Bitcoin, and Solana chains. It accepts
-address watches through ingress adapters, resolves and scans those watches in
-the detector, then publishes normalized lifecycle events through egress
-adapters:
+Pano converts watches into normalized deposit lifecycle events through `ingress → detector → egress`. It observes EVM, Bitcoin, and Solana deposits; it is not a public payment API, wallet/key manager, signer, broadcaster, balance ledger, identity system, or finality guarantee. Keep public authentication, authorization, rate limits, customer policy, and payment effects in the owning gateway/application.
 
-`ingress → detector → egress`
+## Command selection
 
-Use Pano for deposit observation and delivery only. It is not a public payment
-API, wallet/key manager, transaction broadcaster, balance ledger, finality
-guarantee, identity system, or gateway. Keep public authentication,
-authorization, rate limiting, payment policy, and customer-facing APIs in the
-owning gateway/application. Do not collapse or bypass the pipeline boundary.
+| Need | Command and use |
+| --- | --- |
+| Validate config/features | `pano --config Config.toml check`; validates locally and does not contact RPC. Run after every config, secret, or feature change. |
+| Start service | `pano --config Config.toml`; start only after validation succeeds. It starts enabled ingress, detector, egress, and optionally the internal server. |
+| Check liveness | `pano --config Config.toml healthcheck --timeout-secs 3`; use only against a running instance with `pano.server.enabled = true`. It is not end-to-end readiness. |
 
-## Build and configuration prerequisites
+## Prerequisites and features
 
-- Configure at least one shared chain and asset, select both in `[pano]`, and
-  provide an HTTP(S) JSON-RPC endpoint for every selected chain.
-- SQLite is available in the default build. Build with the matching Cargo
-  features before enabling `server`, `webhook`, `postgres`, or `amqp`
-  integrations; `full` enables all optional integrations.
-- Use `${VAR}` for required environment values and `${VAR:-default}` only when
-  an explicit default is safe. An unset required variable is a configuration
-  load failure.
-- Keep shared definitions at the root: `[chains.<id>]`, `[assets.<id>]`,
-  `[paths.<id>]`, `[stores.<id>]`, and `[transports.<kind>.<id>]`. Put Pano
-  selection and behavior under `[pano]`. In a merged configuration, Pano
-  ignores other package namespaces.
-- A chain profile supplies CAIP-2 identity, RPC URLs, and confirmations; an
-  asset profile supplies chain, symbol, decimals, and, for tokens, contract
-  identity. Select profile IDs with `[pano].chains` and `[pano].assets`.
-- Reference paths with `path_ref`, database profiles with `store`, and AMQP or
-  webhook connection profiles with `transport`. Package-local transport values
-  take precedence over the referenced transport profile.
-- Treat configured database table and column identifiers as administrator
-  input. Never derive SQL identifiers from a watch request.
+- Build with Rust 1.97+; configure HTTP(S) JSON-RPC URLs for every selected chain.
+- SQLite is default. `server`, `webhook`, `postgres`, and `amqp` must be compiled before their integrations are enabled; `full` enables all optional integrations.
+- Select root `[chains.<id>]` and `[assets.<id>]` through `[pano].chains` and `[pano].assets`. Chains need `caip2`, `rpc_urls`, and positive confirmations; assets need chain, symbol, and decimals; token assets also need contract/mint identity.
+- `${VAR}` is mandatory environment substitution; `${VAR:-default}` is optional substitution. Never place credentials/secrets in watches.
 
-## Check, run, and healthcheck
-
-After every configuration or feature change, run:
+## Safe workflow
 
 ```bash
-pano check --config Config.toml
+cp Config.example.toml Config.toml
+pano --config Config.toml check
 pano --config Config.toml
 ```
 
-`check` validates root-profile references, Pano configuration, SQL identifier
-constraints, and enabled feature gates without starting scanners or contacting
-chain RPCs. Start only after a successful check.
+Use the checked-in file paths only from the intended working directory, replace its RPC endpoint for deployment, and verify writes to the configured durable sink. Run check again after enabling an adapter, changing a profile reference, or changing features. Persist received events and deduplicate by `event_id` before business side effects.
 
-When `[pano.server].enabled = true`, use the running instance’s internal
-health endpoint for liveness:
+## Exact command reference
 
-```bash
-pano healthcheck --config Config.toml --timeout-secs 3
+```text
+pano [--config <PATH>] [COMMAND]
+
+COMMAND:
+  check
+  healthcheck [--timeout-secs <SECONDS>]
 ```
 
-It requests `/healthz` and succeeds only on `204 No Content`; it requires the
-internal server. Do not use a healthcheck as evidence that every RPC provider,
-scanner, or downstream consumer is healthy.
+| Command | Defaults and output | Result |
+| --- | --- | --- |
+| `pano` | `--config Config.toml`; `PANO_CONFIG` also supplies it | Runs until shutdown; errors exit non-zero |
+| `pano check` | Prints `configuration is valid` | Validates config/profile/feature/SQL identifier constraints without scanners/RPC; 0 on success |
+| `pano healthcheck` | `--timeout-secs 3`; prints `healthy` | GETs local `/healthz`, adding configured API key; succeeds only on 204; timeout must be >0 |
 
-## Pano configuration and detector behavior
+`--config` is a top-level option and must precede the subcommand; use `pano --config Config.toml check`.
 
-`[pano.rpc_defaults]` applies scanner controls across chains: concurrency,
-delay, batch size, scan lookback and interval, scan/request timeouts, retry
-count and base delay, native-scan limit, EVM log-address batching, and Solana
-scan mode/version support. Size those values to provider limits and expected
-block or slot throughput; do not remove bounds to compensate for overload.
+## Configuration and override gates
 
-The detector’s command and per-watch delivery queues are bounded. Tune
-`command_queue_capacity`, `delivery_queue_capacity`, and `delivery_workers`
-for measured load, preserving downstream capacity. Queue saturation is
-backpressure: slow the producer, increase capacity only with memory headroom,
-or add durable egress. It is not permission to drop or duplicate business
-effects.
+Keep shared profiles at root: `[chains]`, `[assets]`, `[paths]`, `[stores]`, and `[transports]`; Pano behavior is under `[pano]`. `path_ref`, `store`, and `transport` must resolve. SQL table/column identifiers are administrator-only input and are restricted before dynamic SQL; never derive them from request data.
 
-`dedup_window_size` retains recent event keys in memory. Detected and confirmed
-events are independently deduplicated because they are distinct lifecycle
-events. A zero window disables eviction and can grow memory without bound.
-Unconfirmed events are retained until their configured confirmation threshold
-is reached; stale-event eviction is controlled by the multiplier and minimum
-block distance. Set confirmation counts for the chain’s finality risk; a
-detected event is observation, not final settlement.
+`[pano.rpc_defaults]` controls concurrency, delay, batch size, EVM log batching, lookback, interval, request/scan timeouts, native cap, retry count/base delay, and Solana mode/version. Bound all values to provider capacity. Detector command and persistent egress queues are bounded and apply backpressure. Per-watch override delivery has a bounded queue but drops that override delivery when full or closed. `dedup_window_size = 0` disables eviction and can grow memory without bound.
 
-### Scanner semantics by chain
+An explicit `WatchSpec.chains` requires `[pano.overrides.chain].assets = true`; that same setting permits an `assets` array. Each egress override needs its exact matching gate: `webhook`, `file`, `pg`, `sqlite`, `queue`, or `http`. Rejected watches must not change active watches. Do not enable a gate merely to pass unreviewed input.
 
-- **EVM:** detects native transfers and ERC-20 `Transfer` logs for watched
-  recipients. Removed logs and malformed/zero-value transfers are skipped.
-  Log index distinguishes transfers in one transaction.
-- **Bitcoin:** scans blocks and outputs for watched addresses, emitting the
-  native asset in satoshis. `log_index` is the output (`vout`) index. Sender is
-  taken from the first input when available.
-- **Solana:** detects native SOL and SPL-token activity for watched targets.
-  `solana_scan_mode = "blocks"` issues one `getBlock` per slot and is capped
-  to `batch_size` slots per cycle; `"signatures"` follows address signatures,
-  uses `batch_size` only as its page limit, and can fall back to a block rescan
-  when a pruned cursor is encountered. Failed transactions, unavailable blocks,
-  and skipped slots do not become deposit events. The account index distinguishes
-  activity within a transaction. A token program may be specified for an SPL asset.
-
-All emitted amounts are positive, base-unit digit strings with no decimal
-point. Transaction IDs are hex for EVM/Bitcoin and base58 for Solana. Preserve
-the event’s CAIP-2, block/slot number, timestamp, sender when available, and
-network-level index when reconciling deposits.
-
-## Watches and ingress
-
-Ingress adapters normalize all input into the same `WatchSpec` and detector
-command path. Supported modes are file polling, internal HTTP, SQLite polling,
-PostgreSQL polling, and AMQP consumption. Enable only the adapters required;
-their referenced path/store/transport profiles and build features must exist.
-
-File ingress uses `[pano.ingress.file]` with `path_ref` and
-`poll_interval_secs`. SQLite and PostgreSQL ingress use `store`, `table`, and
-`poll_interval_secs`. AMQP ingress uses `transport`, `exchange`,
-`routing_key`, `consumer_tag`, and `qos_prefetch`. HTTP ingress requires the
-`server` feature and uses its configured `path` and `max_body_bytes`.
-
-### WatchSpec schema and resolution
-
-A shorthand watch is an address:
+## WatchSpec schema and ingress
 
 ```json
 {"address":"0x1111111111111111111111111111111111111111"}
 ```
 
-It expands across compatible configured chains and their selected assets. An
-explicit watch can contain `address`, `chains`, and `egress`. Each `chains`
-entry has required `caip2` and optional `address`, `start_block`, `end_block`,
-`confirmed_blocks`, and `assets`. Each asset entry has `symbol` and optional
-`address`, `contract`, `token_program`, `decimals`, and `min_amount`.
+| Field | Contract |
+| --- | --- |
+| `address` | Optional root shorthand, expanded across compatible configured chains/assets; fallback for nested entries |
+| `chains[]` | Required `caip2`; optional `address`, `start_block`, `end_block` (`0` follows tip), `confirmed_blocks`, `assets` |
+| `assets[]` | Required `symbol`; optional address, contract, token program, decimals, positive base-unit `min_amount` |
+| `egress` | Optional, gated members: `webhook` (`url`, optional `secret`); `file` (`path`); `pg` (`url`, optional `table.name`); `sqlite` (`path`, optional `table.name`); `queue` (`url`, optional `exchange`, `username`, `password`); `http` (optional `sse`, `websocket`) |
 
-Address resolution cascades asset address → chain address → root address.
-Addresses are validated for the target chain; EVM and Bech32 Bitcoin forms are
-normalized for matching, while case-sensitive Bitcoin Base58 and Solana
-addresses retain case. A custom asset requires both `contract` and `decimals`.
-`min_amount` is in smallest units. Unknown schema fields and malformed watches
-must be rejected rather than silently ignored.
+Unknown fields are rejected. Address resolution is asset → chain → root. EVM and Bech32 Bitcoin addresses normalize for matching; Base58 Bitcoin and Solana retain case. EVM addresses must be `0x` plus 40 hex characters; Solana is validated as base58; Bitcoin supports accepted Base58 and Bech32 forms. Custom assets require both contract and decimals. Amount thresholds and emitted amounts are positive digit strings in smallest units: no decimal point, zero, or leading zeros.
 
-## Override gates
+Ingress may be file, internal HTTP, SQLite, PostgreSQL, or AMQP. Their required path/store/transport profile and build feature must be available. Authoritative file ingress prevents HTTP watch mutations.
 
-Watch input cannot grant itself additional authority. Explicit chain/asset
-overrides require the relevant `[pano.overrides.chain]` permission; per-watch
-egress overrides require the matching `[pano.overrides.egress]` gate
-(`webhook`, `file`, `pg`, `sqlite`, `queue`, or `http`). Keep every gate false
-unless a reviewed integration requires it. A rejected watch must not mutate
-the active watch set.
+## Detector chain semantics
 
-## Egress and event contract
+- **EVM:** native recipient transfers and ERC-20 `Transfer` logs; removed logs, malformed entries, and zero values are skipped. Native scans are block-by-block and capped; ERC-20 log batches can fall back to one contract at a time.
+- **Bitcoin:** scans block outputs for watched addresses, reports satoshis, uses `vout` as `log_index`, and uses the first input address as sender when available.
+- **Solana:** detects confirmed SOL/SPL balance increases. `blocks` mode makes one `getBlock` per slot and limits each cycle to `batch_size`; `signatures` mode pages signatures (page limit no greater than 1000) and fetches transactions. Failed transactions, missing blocks, and skipped slots emit nothing. A pruned signature cursor falls back to a block-style rescan. Omitted token program scans classic and Token-2022 associated token accounts; an explicit program limits it.
 
-Egress adapters are file, SQLite, PostgreSQL, AMQP, webhook, and the internal
-SSE/WebSocket stream. Use file or database egress when durable reconciliation
-is required. AMQP uses the configured exchange and distinct detected/confirmed
-routing keys. Webhook egress requires the `webhook` feature and uses its
-transport profile, secret, and configured signature header. Stream egress
-requires both the `server` feature and an enabled internal server; its bounded
-broadcast buffer may report consumer lag and is not durable storage.
+`scan_lookback_blocks` deliberately re-scans recent ranges. Scan cursor, unconfirmed deposits, and dedup state are in-memory and discarded on shutdown. With no start block and zero lookback, first scan starts at the current tip. Configure start/lookback and reconciliation for provider gaps, reorgs, restart loss, and pruning.
 
-Every adapter receives the same serialized envelope. `internal_egress` routing
-metadata is never serialized. Example:
+## Events, egress, and HTTP contracts
+
+All adapters receive `DepositEvent`:
 
 ```json
-{
-  "event_id":"01J2V8Q8YQW18Y0AM3QFQZ76A7",
-  "event":"pano.deposit.confirmed",
-  "version":1,
-  "occurred_at":"2026-07-12T12:00:00Z",
-  "data":{
-    "tx_id":"0xabc123",
-    "caip2":"eip155:1",
-    "symbol":"USDC",
-    "address":"0x1111111111111111111111111111111111111111",
-    "block_number":21000000,
-    "log_index":4,
-    "amount":"1000000",
-    "sender":"0x2222222222222222222222222222222222222222",
-    "confirmations":12,
-    "timestamp":"2026-07-12T11:59:42Z"
-  }
-}
+{"event_id":"01J2V8Q8YQW18Y0AM3QFQZ76A7","event":"pano.deposit.detected","version":1,"occurred_at":"2026-07-12T12:00:00Z","data":{"tx_id":"0xabc123","caip2":"eip155:1","symbol":"ETH","address":"0x1111111111111111111111111111111111111111","block_number":21000000,"log_index":0,"amount":"1","sender":"0x2222222222222222222222222222222222222222","confirmations":1,"timestamp":"2026-07-12T11:59:42Z"}}
 ```
 
-`pano.deposit.detected` and `pano.deposit.confirmed` are separate events with
-separate IDs. Persist and deduplicate by `event_id` before external side
-effects. Consumers that require recovery after outages or stream lag must
-reconcile from durable egress, not assume replay from the broadcast stream.
+`event` is exactly `pano.deposit.detected` or `pano.deposit.confirmed`; they have distinct ULIDs and are independently deduplicated. `tx_id` is EVM/Bitcoin hex or Solana base58. `log_index` is EVM log index, Bitcoin output index, or Solana account index. Sender may be empty. `internal_egress` is never serialized.
 
-## Internal HTTP API and errors
+File, SQLite, PostgreSQL, AMQP, and webhook are persistent/external egress paths. AMQP uses configured detected/confirmed keys. Webhooks POST JSON, send `X-Pano-Event`, and sign the exact JSON body with lowercase-hex HMAC-SHA256 in the configured header when secret is non-empty; retry network failures, 429, and 5xx with configured bounded exponential backoff.
 
-With `[pano.server].enabled = true`, routes are served below
-`/<prefix>` (`/v1` by default):
+SSE and WebSocket require `server` plus stream egress. They are broadcast streams, not durable queues: lag generates `pano.stream.lag` with `{"missed":n}` and no replay. SSE uses the deposit event type as its SSE event name. Reconcile loss-intolerant consumers from durable egress.
 
-- `POST /v1/watch` adds or replaces the resolved watches for that request.
-- `DELETE /v1/watch/{address}` removes watches for that address.
-- `GET /healthz` reports `204` only while the server and detector command loop
-  are live.
-- `GET /v1/events` and `GET /v1/ws` provide SSE and WebSocket streams when
-  stream egress is enabled.
+With server enabled, routes are `POST /<prefix>/<ingress.path>`, `DELETE` on that path plus `/{address}`, `GET /healthz`, and enabled SSE/WS routes. The example defaults are `/v1/watch`, `/v1/events`, and `/v1/ws`. POST returns 201; successful DELETE returns 204. Health is 204 only while server and detector command loop are live, otherwise 503. A non-empty `api_key` protects **every** route and accepts either matching `Authorization: Bearer <key>` or matching `X-Pano-API-Key: <key>`; both may be present.
 
-The server can require either `Authorization: Bearer <key>` or
-`X-Pano-API-Key: <key>` when `api_key` is non-empty. This is internal-hop
-defense in depth, not a substitute for a public gateway. Invalid JSON or an
-invalid watch is a client error; unknown watch fields are rejected. Disabled
-routes and unavailable services are server errors. Error bodies use the form:
+## Errors and recovery
 
-```json
-{"error":"invalid_request","message":"address is required when chains is empty"}
-```
+Pano application error JSON is `{"error":"…","message":"…"}`. Exact values/statuses: `unauthorized` 401, `bad_request` 400, `conflict` 409, `not_found` 404, `method_not_allowed` 405, and `unavailable` 503. Unknown route is `not_found`. Framework rejections are malformed JSON 400, unknown WatchSpec fields 422, and absent JSON content type 415. Duplicate watch triads are 409; unknown DELETE addresses are 404; authoritative file ingress rejects HTTP mutations with 405.
 
-Retry transport failures and `5xx` only with bounded exponential backoff.
-Correct request data, configuration, feature selection, or authorization before
-retrying client errors.
+Correct 4xx request, authorization, configuration, or feature errors before retrying. Retry only transient transport/5xx failures with bounded backoff. For missing events: check config, selected chain/asset/address, range/confirmation settings, RPC reachability, queue pressure, and durable sink writes; do not compensate by unbounded queues or retries.
 
-## Reliability, security, and deployment
+## Reliability, security, and prohibited actions
 
-- Bound retries for RPC, webhooks, and downstream transport writes using the
-  configured retry count and base delay. Do not retry permanent validation,
-  configuration, disabled-feature, or authentication failures.
-- Set RPC concurrency, batching, delay, timeout, and scan interval below
-  provider limits. Investigate persistent RPC errors, missed ranges, or queue
-  pressure instead of increasing retries indefinitely.
-- Persist events before side effects and use a durable egress/database for
-  recovery and reconciliation. In-memory deduplication and broadcast streams
-  alone do not provide durable exactly-once delivery.
-- Keep RPC credentials, AMQP passwords, webhook secrets, and internal API keys
-  in environment-backed secret management; never place them in watch payloads,
-  logs, dashboards, or public clients. Limit file permissions and database/
-  broker credentials to the minimum required scope.
-- Do not publish the internal listener. Bind and firewall it for trusted
-  internal callers, place the owning gateway in front of any public surface,
-  and expose dashboard exports only on an approved internal path.
-- On deployment, run `pano check`, verify feature/config alignment and secret
-  injection, start Pano, then verify `/healthz`. Alert on scanner/RPC failures,
-  queue saturation, egress failures, stream lag, and durable-store errors.
-- For shutdown, stop ingress producers first, allow the configured
-  `shutdown_timeout_secs` for background work, then stop the process. Preserve
-  durable egress and scan state needed for reconciliation; do not treat a
-  process stop as delivery completion.
+- Treat detected events as observations, not settlement; confirmations reduce but do not erase chain risk.
+- Persist then apply effects; event IDs make consumers idempotent, not exactly-once delivery.
+- Do not publish the internal server. Use a protected gateway; API key is defense in depth only.
+- Keep RPC credentials, broker/database passwords, webhook secrets, and API keys in secret management. Restrict file and database permissions.
+- Stop ingress first and allow `shutdown_timeout_secs`; remaining tasks can be aborted after timeout.
+- Do not claim stream replay, scanner persistence, complete historical coverage, or exactly-once guarantees. Do not invent flags, routes, config fields, or adapter behavior.
 
-## Troubleshooting and verification
+## Verification checklist
 
-1. Run `pano check --config Config.toml`; resolve every profile reference,
-   identifier, feature-gate, and environment substitution error first.
-2. Confirm selected chains/assets, CAIP-2 values, RPC reachability, start/end
-   boundaries, confirmation counts, and address/asset compatibility.
-3. Confirm the ingress adapter is enabled, its file/store/transport profile is
-   correct, and the submitted watch conforms to `WatchSpec` and override gates.
-4. Check detector queue pressure and RPC timeout/retry behavior. Reduce scan
-   work or provision capacity rather than accepting unbounded buffering.
-5. Verify durable egress writes and downstream idempotency by `event_id`; use
-   the durable sink to reconcile detected and confirmed lifecycle events.
-6. For streams, verify stream egress plus the server feature/server setting;
-   investigate lag with durable storage, not a presumed replay.
-
-Run focused tests for changed behavior and the complete suite before release:
-
-```bash
-cargo test
-```
-
-For end-to-end coverage, use the repository e2e stack only with its required
-Docker/Compose environment, local Anvil, Solana test validator, Bitcoin Core
-regtest, and command-line prerequisites. Exercise native and token deposits,
-watch creation/removal, confirmation events, durable egress, and shutdown;
-tear down containers and separately stop local chain processes afterward.
-
-## Prohibited actions
-
-- Do not use Pano as a public gateway or expose its internal server directly.
-- Do not put secrets, RPC URLs with credentials, or SQL identifiers in watch
-  requests or event consumers’ logs.
-- Do not enable a config section whose build feature is absent.
-- Do not enable override gates merely to make a request pass.
-- Do not treat detected events as confirmed, stream delivery as durable, or
-  in-memory deduplication as an exactly-once guarantee.
-- Do not retry malformed input, invalid configuration, disabled features, or
-  permanent downstream failures without correcting the cause.
-- Do not invent configuration keys, API routes, adapter behavior, or recovery
-  guarantees; validate changes with `pano check` and tests.
-
-## Final checklist
-
-- [ ] Root chains, assets, paths, stores, and transports resolve; `[pano]`
-      selects the intended chain and asset profiles.
-- [ ] Enabled adapters match installed features and approved ingress/egress
-      profiles; SQL identifiers are administrator-configured.
-- [ ] RPC, confirmation, scan, timeout, retry, queue, and dedup settings are
-      sized for the deployment.
-- [ ] Watch schema, address/asset validation, and override gates are correct.
-- [ ] Consumers persist and deduplicate `event_id`; durable reconciliation is
-      available where loss is unacceptable.
-- [ ] Internal server is protected, secrets are injected safely, and the public
-      gateway owns public security controls.
-- [ ] `pano check` passes, the service starts, `/healthz` returns `204` when
-      enabled, and relevant tests/e2e scenarios pass.
+- [ ] Required features match every enabled integration; `pano --config Config.toml check` prints `configuration is valid`.
+- [ ] Root profile references, CAIP-2 IDs, RPC URLs, scan bounds, confirmations, and asset decimals/minimums are correct.
+- [ ] Watch schema and override gates are reviewed; no secrets or SQL identifiers originate from requests.
+- [ ] Durable egress exists where loss matters; consumers persist and deduplicate both lifecycle events by `event_id`.
+- [ ] Internal server is private; authentication is tested; `/healthz` returns 204 only after startup.
+- [ ] RPC/provider limits, bounded queues/retries, stream lag, scanner errors, and durable delivery failures are monitored.
+- [ ] Relevant tests pass: `cargo test` (and `cargo test --features full` when applicable).
