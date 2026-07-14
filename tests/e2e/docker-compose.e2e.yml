@@ -34,17 +34,19 @@ services:
 
   # ── Ladon (address-pool daemon) ─────────────────────────────────────────
   ladon:
-    image: ghcr.io/melonask/ladon:latest
+    image: ${LADON_IMAGE:-ghcr.io/melonask/ladon:latest}
+    command: ["pool"]
     restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
     environment:
+      LADON_CONFIG: "/etc/ladon/Config.toml"
       LADON_MNEMONIC: "${LADON_MNEMONIC:?set LADON_MNEMONIC to a 12-word BIP-39 mnemonic}"
       DATABASE_URL: "postgres://ladon:ladonpass@postgres:5432/pano"
       RUST_LOG: "ladon=info"
     volumes:
-      - ./Config.ladon.toml:/app/Config.toml:ro
+      - ./Config.ladon.toml:/etc/ladon/Config.toml:ro
 
   # ── Pano (multi-chain deposit detector) ─────────────────────────────────
   pano:

@@ -16,7 +16,7 @@ mod imp {
         State(handle): State<DetectorHandle>,
     ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
         let keepalive_secs = handle.config.egress.http.sse_keepalive_secs.max(1);
-        let receiver = handle.events_tx.subscribe();
+        let receiver = handle.stream_tx.subscribe();
         let stream = BroadcastStream::new(receiver).filter_map(|result| match result {
             Ok(event) => {
                 let data = serde_json::to_string(&event).ok()?;

@@ -188,6 +188,7 @@ impl SolanaScanner {
             .batch_size
             .clamp(1, 1000);
         let mut seen_signatures = hashbrown::HashSet::new();
+        let mut diagnostics = SignatureScanDiagnostics::default();
 
         for addr in targets.keys() {
             let mut before: Option<String> = None;
@@ -225,6 +226,8 @@ impl SolanaScanner {
                 let Some(sig_array) = sigs.as_array() else {
                     break;
                 };
+                diagnostics.signature_pages += 1;
+                diagnostics.signature_entries += sig_array.len() as u64;
                 if sig_array.is_empty() {
                     tracing::debug!(address = %addr, "no Solana signatures for scan target");
                     break;
@@ -243,9 +246,11 @@ impl SolanaScanner {
                     };
                     if slot < from_slot {
                         reached_older_slots = true;
+                        diagnostics.rejected_below_range += 1;
                         continue;
                     }
                     if slot > to_slot {
+                        diagnostics.rejected_above_range += 1;
                         continue;
                     }
                     let Some(sig) = sig_entry.get("signature").and_then(|v| v.as_str()) else {
@@ -255,6 +260,7 @@ impl SolanaScanner {
                         candidates.push((sig.to_string(), slot));
                     }
                 }
+                diagnostics.candidates += candidates.len() as u64;
 
                 let batch_concurrency = self.chain.rpc_options_or_default().max_concurrent.max(1);
                 let transaction_results: Vec<(String, u64, anyhow::Result<serde_json::Value>)> = {
@@ -285,11 +291,33 @@ impl SolanaScanner {
                         .await
                 };
                 for (sig, slot, txn) in transaction_results {
+                    let events_before = events.len();
                     match txn {
                         Ok(txn) => {
-                            self.process_transaction(&sig, slot, &txn, targets, events, None)?;
+                            if txn.is_null() {
+                                diagnostics.null_get_transactions += 1;
+                            } else {
+                                diagnostics.successful_get_transactions += 1;
+                            }
+                            let result =
+                                self.process_transaction(&sig, slot, &txn, targets, events, None);
+                            tracing::debug!(
+                                signature = %sig,
+                                slot,
+                                added_events = events.len().saturating_sub(events_before),
+                                processing_succeeded = result.is_ok(),
+                                "processed Solana signature transaction"
+                            );
+                            result?;
                         }
                         Err(e) => {
+                            diagnostics.failed_get_transactions += 1;
+                            tracing::debug!(
+                                signature = %sig,
+                                slot,
+                                added_events = 0,
+                                "Solana signature transaction fetch produced no events"
+                            );
                             tracing::warn!(signature = %sig, error = %e, "failed to fetch Solana transaction");
                         }
                     }
@@ -317,8 +345,34 @@ impl SolanaScanner {
             }
         }
 
+        tracing::debug!(
+            from_slot,
+            to_slot,
+            signature_pages = diagnostics.signature_pages,
+            signature_entries = diagnostics.signature_entries,
+            rejected_below_range = diagnostics.rejected_below_range,
+            rejected_above_range = diagnostics.rejected_above_range,
+            candidates = diagnostics.candidates,
+            successful_get_transactions = diagnostics.successful_get_transactions,
+            null_get_transactions = diagnostics.null_get_transactions,
+            failed_get_transactions = diagnostics.failed_get_transactions,
+            events = events.len(),
+            "Solana signature scan complete"
+        );
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct SignatureScanDiagnostics {
+    signature_pages: u64,
+    signature_entries: u64,
+    rejected_below_range: u64,
+    rejected_above_range: u64,
+    candidates: u64,
+    successful_get_transactions: u64,
+    null_get_transactions: u64,
+    failed_get_transactions: u64,
 }
 
 fn expand_solana_scan_targets(targets: &TargetMap) -> TargetMap {
@@ -397,9 +451,7 @@ impl SolanaScanner {
         let timestamp = chrono::DateTime::from_timestamp(block_time, 0)
             .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
             .unwrap_or_default();
-        let Some(native_asset) = self.chain.assets.iter().find(|a| a.contract.is_none()) else {
-            return Ok(());
-        };
+        let native_asset = self.chain.assets.iter().find(|a| a.contract.is_none());
         let meta = tx.get("meta");
         let message = tx.get("transaction").and_then(|t| t.get("message"));
         if let (Some(meta), Some(message)) = (meta, message) {
@@ -441,34 +493,36 @@ impl SolanaScanner {
                 .and_then(account_key_pubkey)
                 .unwrap_or("")
                 .to_string();
-            for (i, (pre, post)) in pre_balances.iter().zip(post_balances.iter()).enumerate() {
-                let pre_val = pre.as_u64().unwrap_or(0);
-                let post_val = post.as_u64().unwrap_or(0);
-                if post_val <= pre_val {
-                    continue;
+            if let Some(native_asset) = native_asset {
+                for (i, (pre, post)) in pre_balances.iter().zip(post_balances.iter()).enumerate() {
+                    let pre_val = pre.as_u64().unwrap_or(0);
+                    let post_val = post.as_u64().unwrap_or(0);
+                    if post_val <= pre_val {
+                        continue;
+                    }
+                    let addr = account_keys
+                        .get(i)
+                        .and_then(account_key_pubkey)
+                        .unwrap_or("")
+                        .to_string();
+                    if !asset_allowed(targets, &addr, &native_asset.symbol) {
+                        continue;
+                    }
+                    let amount = (post_val - pre_val).to_string();
+                    events.push(DepositEvent::detected(DepositData {
+                        tx_id: tx_id.to_string(),
+                        caip2: self.chain.caip2.clone(),
+                        symbol: native_asset.symbol.clone(),
+                        address: addr,
+                        block_number: slot,
+                        log_index: i as u64,
+                        amount,
+                        sender: from_addr.clone(),
+                        confirmations: 1,
+                        timestamp: timestamp.clone(),
+                        internal_egress: None,
+                    })?);
                 }
-                let addr = account_keys
-                    .get(i)
-                    .and_then(account_key_pubkey)
-                    .unwrap_or("")
-                    .to_string();
-                if !asset_allowed(targets, &addr, &native_asset.symbol) {
-                    continue;
-                }
-                let amount = (post_val - pre_val).to_string();
-                events.push(DepositEvent::detected(DepositData {
-                    tx_id: tx_id.to_string(),
-                    caip2: self.chain.caip2.clone(),
-                    symbol: native_asset.symbol.clone(),
-                    address: addr,
-                    block_number: slot,
-                    log_index: i as u64,
-                    amount,
-                    sender: from_addr.clone(),
-                    confirmations: 1,
-                    timestamp: timestamp.clone(),
-                    internal_egress: None,
-                })?);
             }
 
             let pre_tokens = meta
@@ -630,9 +684,12 @@ fn find_spl_sender(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AssetConfig;
     use crate::model::ResolvedAsset;
+    use serde_json::json;
 
     const OWNER: &str = "11111111111111111111111111111111";
+    const SENDER: &str = "SysvarRent111111111111111111111111111111111";
     const MINT: &str = "So11111111111111111111111111111111111111112";
 
     fn token_targets(token_program: Option<String>) -> TargetMap {
@@ -647,6 +704,174 @@ mod tests {
             }],
         );
         targets
+    }
+
+    fn scanner() -> SolanaScanner {
+        SolanaScanner::new(ChainConfig {
+            caip2: "solana:test".to_string(),
+            start_block: None,
+            end_block: None,
+            confirmed_blocks: 1,
+            rpc: Vec::new(),
+            rpc_options: None,
+            assets: vec![AssetConfig {
+                symbol: "SOL".to_string(),
+                contract: None,
+                token_program: None,
+                decimals: 9,
+                min_amount: None,
+            }],
+        })
+        .expect("scanner")
+    }
+
+    fn token_only_scanner() -> SolanaScanner {
+        SolanaScanner::new(ChainConfig {
+            caip2: "solana:test".to_string(),
+            start_block: None,
+            end_block: None,
+            confirmed_blocks: 1,
+            rpc: Vec::new(),
+            rpc_options: None,
+            assets: vec![AssetConfig {
+                symbol: "TEST".to_string(),
+                contract: Some(MINT.to_string()),
+                token_program: Some(SPL_TOKEN_PROGRAM_ID.to_string()),
+                decimals: 6,
+                min_amount: None,
+            }],
+        })
+        .expect("scanner")
+    }
+
+    fn native_targets() -> TargetMap {
+        let mut targets = TargetMap::new();
+        targets.insert(
+            OWNER.to_string(),
+            vec![ResolvedAsset {
+                symbol: "SOL".to_string(),
+                contract: None,
+                token_program: None,
+                decimals: Some(9),
+            }],
+        );
+        targets
+    }
+
+    fn token_transaction(token_program: &str) -> serde_json::Value {
+        json!({
+            "blockTime": 1_700_000_000,
+            "transaction": { "message": { "accountKeys": [SENDER, OWNER] } },
+            "meta": {
+                "err": null,
+                "preBalances": [100, 0],
+                "postBalances": [90, 0],
+                "preTokenBalances": [
+                    { "accountIndex": 0, "mint": MINT, "owner": SENDER, "programId": token_program, "uiTokenAmount": { "amount": "1000", "decimals": 6 } },
+                    { "accountIndex": 1, "mint": MINT, "owner": OWNER, "programId": token_program, "uiTokenAmount": { "amount": "200", "decimals": 6 } }
+                ],
+                "postTokenBalances": [
+                    { "accountIndex": 0, "mint": MINT, "owner": SENDER, "programId": token_program, "uiTokenAmount": { "amount": "900", "decimals": 6 } },
+                    { "accountIndex": 1, "mint": MINT, "owner": OWNER, "programId": token_program, "uiTokenAmount": { "amount": "300", "decimals": 6 } }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn process_transaction_emits_native_sol_for_watched_owner() {
+        let mut events = Vec::new();
+        let transaction = json!({
+            "blockTime": 1_700_000_000,
+            "transaction": { "message": { "accountKeys": [SENDER, OWNER] } },
+            "meta": { "err": null, "preBalances": [100, 50], "postBalances": [90, 75] }
+        });
+
+        scanner()
+            .process_transaction(
+                "native-signature",
+                42,
+                &transaction,
+                &native_targets(),
+                &mut events,
+                None,
+            )
+            .expect("process transaction");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data.symbol, "SOL");
+        assert_eq!(events[0].data.address, OWNER);
+        assert_eq!(events[0].data.amount, "25");
+    }
+
+    #[test]
+    fn process_transaction_emits_classic_spl_for_watched_owner_and_mint() {
+        let mut events = Vec::new();
+        token_only_scanner()
+            .process_transaction(
+                "classic-signature",
+                42,
+                &token_transaction(SPL_TOKEN_PROGRAM_ID),
+                &token_targets(Some(SPL_TOKEN_PROGRAM_ID.to_string())),
+                &mut events,
+                None,
+            )
+            .expect("process transaction");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data.address, OWNER);
+        assert_eq!(events[0].data.symbol, "TEST");
+        assert_eq!(events[0].data.amount, "100");
+    }
+
+    #[test]
+    fn process_transaction_emits_token_2022_for_watched_owner_and_mint() {
+        let mut events = Vec::new();
+        token_only_scanner()
+            .process_transaction(
+                "token-2022-signature",
+                42,
+                &token_transaction(TOKEN_2022_PROGRAM_ID),
+                &token_targets(Some(TOKEN_2022_PROGRAM_ID.to_string())),
+                &mut events,
+                None,
+            )
+            .expect("process transaction");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data.address, OWNER);
+        assert_eq!(events[0].data.symbol, "TEST");
+        assert_eq!(events[0].data.amount, "100");
+    }
+
+    #[test]
+    fn process_transaction_emits_native_and_token_events_for_owner() {
+        let mut events = Vec::new();
+        let mut targets = native_targets();
+        let mut token_assets = token_targets(Some(SPL_TOKEN_PROGRAM_ID.to_string()));
+        targets
+            .get_mut(OWNER)
+            .expect("native owner target")
+            .extend(token_assets.remove(OWNER).expect("token owner target"));
+        let mut transaction = token_transaction(SPL_TOKEN_PROGRAM_ID);
+        transaction["meta"]["preBalances"] = json!([100, 50]);
+        transaction["meta"]["postBalances"] = json!([90, 75]);
+
+        scanner()
+            .process_transaction(
+                "combined-signature",
+                42,
+                &transaction,
+                &targets,
+                &mut events,
+                None,
+            )
+            .expect("process transaction");
+
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.data.address == OWNER));
+        assert!(events.iter().any(|event| event.data.symbol == "SOL"));
+        assert!(events.iter().any(|event| event.data.symbol == "TEST"));
     }
 
     #[test]

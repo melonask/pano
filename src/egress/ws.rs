@@ -98,7 +98,7 @@ mod imp {
         let heartbeat_interval =
             Duration::from_secs(handle.config.egress.http.ws_heartbeat_secs.max(1));
 
-        let mut rx = BroadcastStream::new(handle.events_tx.subscribe());
+        let mut rx = BroadcastStream::new(handle.stream_tx.subscribe());
         let (mut sender, mut receiver) = socket.split();
         let mut heartbeat = tokio::time::interval(heartbeat_interval);
         let mut awaiting_heartbeat_pong = false;

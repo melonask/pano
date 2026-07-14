@@ -84,6 +84,8 @@ max_decimals = 30
 [pano.rpc_defaults]
 max_concurrent = 10
 delay_ms = 0
+# Bitcoin blocks/Solana block-scan slots per cycle, Solana signature-page size,
+# and EVM ERC-20 request batch size. Solana signature scans do not slot-cap.
 batch_size = 200
 evm_log_address_batching = true
 scan_lookback_blocks = 50
@@ -180,6 +182,11 @@ transport = "ops"
 secret = "${PANO_WEBHOOK_SECRET:-}"
 signature_header = "X-Pano-Signature"
 
+# Each enabled file, SQLite, PostgreSQL, AMQP, and webhook sink has its own
+# lossless bounded queue. A full queue applies backpressure to the detector.
+[pano.egress]
+persistent_queue_capacity = 4096
+
 [pano.egress.stream]
 # SSE/WebSocket event stream. Requires --features server and pano.server.enabled = true.
 enabled = false
@@ -198,6 +205,9 @@ broadcast_capacity = 1024
 caip2 = "eip155:1"
 rpc_urls = ["https://eth.llamarpc.com"]
 confirmations = 12
+# Optional bounded scan range. Environment values are unquoted TOML integers.
+# start_block = ${PANO_ETH_START_BLOCK}
+# end_block = ${PANO_ETH_END_BLOCK}
 
 # ── Assets: shared asset identity ────────────────────────────────────────────
 [assets.eth]
@@ -205,6 +215,8 @@ enabled = true
 chain = "eth"
 symbol = "ETH"
 decimals = 18
+# Optional Solana token program profile; omit it to scan both classic and Token-2022.
+# token_program = "${PANO_ASSET_TOKEN_PROGRAM}"
 
 # ── Stores: durable database profiles ────────────────────────────────────────
 [stores.pano]

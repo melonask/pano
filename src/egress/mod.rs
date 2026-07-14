@@ -9,92 +9,153 @@ pub mod ws;
 use crate::config::EgressConfig;
 use crate::model::DepositEvent;
 use anyhow::Result;
-use tokio::sync::broadcast;
+use std::fmt;
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
-/// Handle for broadcasting deposit events to all enabled egress targets.
+/// A bounded, lossless queue feeding one durable or external egress adapter.
 #[derive(Debug, Clone)]
-pub struct EgressHandle {
-    pub event_tx: broadcast::Sender<DepositEvent>,
+pub struct PersistentSinkSender {
+    name: &'static str,
+    sender: mpsc::Sender<DepositEvent>,
 }
 
-/// Receive the next event from a broadcast channel, handling lag gracefully.
-/// Returns `None` when the channel is closed.
-pub async fn recv_event(rx: &mut broadcast::Receiver<DepositEvent>) -> Option<DepositEvent> {
-    loop {
-        match rx.recv().await {
-            Ok(ev) => return Some(ev),
-            Err(broadcast::error::RecvError::Lagged(missed)) => {
-                tracing::warn!(missed, "broadcast receiver lagging, skipping missed events");
-                continue;
+impl PersistentSinkSender {
+    pub fn new(name: &'static str, sender: mpsc::Sender<DepositEvent>) -> Self {
+        Self { name, sender }
+    }
+}
+
+/// Returned when one or more configured persistent adapters have stopped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressPublishError {
+    pub closed_sinks: Vec<&'static str>,
+}
+
+impl fmt::Display for EgressPublishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "persistent egress sink channel(s) closed: {}",
+            self.closed_sinks.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for EgressPublishError {}
+
+/// Handle for publishing detector events to durable sinks and the lossy stream.
+#[derive(Debug, Clone)]
+pub struct EgressHandle {
+    stream_tx: broadcast::Sender<DepositEvent>,
+    persistent_sinks: Vec<PersistentSinkSender>,
+}
+
+impl EgressHandle {
+    pub fn new(
+        stream_tx: broadcast::Sender<DepositEvent>,
+        persistent_sinks: Vec<PersistentSinkSender>,
+    ) -> Self {
+        Self {
+            stream_tx,
+            persistent_sinks,
+        }
+    }
+
+    /// The bounded broadcast sender used only by SSE/WebSocket clients.
+    pub fn stream_sender(&self) -> broadcast::Sender<DepositEvent> {
+        self.stream_tx.clone()
+    }
+
+    /// Publish to every persistent sink with backpressure, then to the lossy stream.
+    ///
+    /// A closed persistent sink is reported after every other sink has received the
+    /// event, so a failed adapter cannot prevent healthy adapters from progressing.
+    pub async fn publish_event(&self, event: DepositEvent) -> Result<(), EgressPublishError> {
+        let mut closed_sinks = Vec::new();
+        for sink in &self.persistent_sinks {
+            if sink.sender.send(event.clone()).await.is_err() {
+                closed_sinks.push(sink.name);
             }
-            Err(broadcast::error::RecvError::Closed) => return None,
+        }
+        // Broadcast receivers are intentionally best-effort stream consumers.
+        let _ = self.stream_tx.send(event);
+
+        if closed_sinks.is_empty() {
+            Ok(())
+        } else {
+            Err(EgressPublishError { closed_sinks })
         }
     }
 }
 
 /// Start all enabled egress targets and return their tasks for shutdown waits.
 /// Per-address delivery overrides are handled by async detector-owned delivery
-/// workers, NOT from this broadcast layer.
+/// workers, not by this egress layer.
 pub fn start_with_tasks(config: EgressConfig) -> Result<(EgressHandle, Vec<JoinHandle<()>>)> {
-    let (event_tx, _) = broadcast::channel::<DepositEvent>(config.broadcast_capacity.max(1));
+    let (stream_tx, _) = broadcast::channel::<DepositEvent>(config.broadcast_capacity.max(1));
+    let queue_capacity = config.persistent_queue_capacity.max(1);
+    let mut persistent_sinks = Vec::new();
     let mut tasks = Vec::new();
 
     if config.file.enabled {
-        let mut rx = event_tx.subscribe();
+        let (tx, rx) = mpsc::channel(queue_capacity);
+        persistent_sinks.push(PersistentSinkSender::new("file", tx));
         let path = config.file.path.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = file::write_events(path, &mut rx).await {
-                tracing::error!(error = %e, "file egress failed");
+            if let Err(error) = file::write_events(path, rx).await {
+                tracing::error!(%error, "file egress failed");
             }
         }));
     }
 
     #[cfg(feature = "sqlite")]
     if config.sqlite.enabled {
-        let mut rx = event_tx.subscribe();
+        let (tx, rx) = mpsc::channel(queue_capacity);
+        persistent_sinks.push(PersistentSinkSender::new("sqlite", tx));
         let cfg = config.sqlite.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = sqlite::write_events(cfg, &mut rx).await {
-                tracing::error!(error = %e, "sqlite egress failed");
+            if let Err(error) = sqlite::write_events(cfg, rx).await {
+                tracing::error!(%error, "sqlite egress failed");
             }
         }));
     }
 
     #[cfg(feature = "postgres")]
     if config.pg.enabled {
-        let mut rx = event_tx.subscribe();
+        let (tx, rx) = mpsc::channel(queue_capacity);
+        persistent_sinks.push(PersistentSinkSender::new("postgres", tx));
         let cfg = config.pg.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = pg::write_events(cfg, &mut rx).await {
-                tracing::error!(error = %e, "pg egress failed");
+            if let Err(error) = pg::write_events(cfg, rx).await {
+                tracing::error!(%error, "pg egress failed");
             }
         }));
     }
 
     #[cfg(feature = "amqp")]
     if config.queue.enabled {
-        let mut rx = event_tx.subscribe();
-        let queue_cfg = config.queue.clone();
+        let (tx, rx) = mpsc::channel(queue_capacity);
+        persistent_sinks.push(PersistentSinkSender::new("amqp", tx));
+        let cfg = config.queue.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = queue::publish(queue_cfg, &mut rx).await {
-                tracing::error!(error = %e, "queue egress failed");
+            if let Err(error) = queue::publish(cfg, rx).await {
+                tracing::error!(%error, "queue egress failed");
             }
         }));
     }
 
     #[cfg(feature = "webhook")]
     if config.webhook.enabled {
-        let mut rx = event_tx.subscribe();
-        let webhook_cfg = config.webhook.clone();
+        let (tx, rx) = mpsc::channel(queue_capacity);
+        persistent_sinks.push(PersistentSinkSender::new("webhook", tx));
+        let cfg = config.webhook.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = webhook::deliver(webhook_cfg, &mut rx).await {
-                tracing::error!(error = %e, "webhook egress failed");
+            if let Err(error) = webhook::deliver(cfg, rx).await {
+                tracing::error!(%error, "webhook egress failed");
             }
         }));
     }
 
-    // SSE and WebSocket egress are handled by router routes — no spawn needed here.
-
-    Ok((EgressHandle { event_tx }, tasks))
+    Ok((EgressHandle::new(stream_tx, persistent_sinks), tasks))
 }

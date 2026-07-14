@@ -106,9 +106,7 @@ fn start_detector(
         command_rx: ingress_rx,
     };
     let (events_tx, _) = broadcast::channel::<DepositEvent>(4096);
-    let egress = EgressHandle {
-        event_tx: events_tx.clone(),
-    };
+    let egress = EgressHandle::new(events_tx.clone(), vec![]);
     let (handle, task) =
         pano::detector::start_with_tasks(config, ingress, egress).expect("detector start");
     let events_rx = events_tx.subscribe();

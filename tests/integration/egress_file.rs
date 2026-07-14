@@ -1,7 +1,7 @@
 /// Integration tests for file egress.
 ///
 /// Covers: JSON/JSONL/CSV writes, append behaviour, internal_egress skip,
-/// concurrent JSON writes, canonical-path lock key, and broadcast lag.
+/// concurrent JSON writes, canonical-path lock key, and bounded queue draining.
 use super::common;
 
 use pano::egress::file::{FileWriteLocks, write_event_to_path, write_event_to_path_with_locks};
@@ -331,36 +331,31 @@ async fn canonical_path_lock_behaviour_with_symlink() {
     );
 }
 
-// ── broadcast::Receiver lag handled ──────────────────────────────────────
+// ── bounded receiver draining ────────────────────────────────────────────
 
 #[tokio::test]
-async fn write_events_handles_broadcast_lag() {
-    // This tests the `write_events` loop by creating a broadcast channel
-    // with capacity 1 and overflowing it so that receivers see Lagged.
+async fn write_events_drains_bounded_queue_without_loss() {
     use pano::egress::file::write_events;
-    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
 
     let dir = TempDir::new().expect("temp dir");
     let path = dir.path().join("lagged.jsonl");
     let path_s = path.to_str().expect("utf8 path");
 
-    let (tx, rx) = broadcast::channel::<DepositEvent>(1);
+    let (tx, rx) = mpsc::channel::<DepositEvent>(1);
 
     // Spawn the write_events task
     let path_clone = path_s.to_string();
     let task = tokio::spawn(async move {
-        let mut rx = rx;
         // Use a timeout to prevent hanging if something goes wrong
         let _ = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            write_events(path_clone, &mut rx),
+            write_events(path_clone, rx),
         )
         .await;
     });
 
-    // Send several events faster than the receiver can consume.
-    // Capacity is 1, so this deterministically produces a lag condition for
-    // the receiver; the final event remains available to be written.
+    // Capacity is 1, so sends must wait for the file writer rather than drop.
     for i in 0..5 {
         let ev = mk_event(
             &format!("0xlagged_{i}"),
@@ -368,10 +363,14 @@ async fn write_events_handles_broadcast_lag() {
             i as u64,
             None,
         );
-        let _ = tx.send(ev);
+        tx.send(ev)
+            .await
+            .expect("file egress receiver remains open");
     }
     let final_event = mk_event("0xlagged_final", "9999", 99, None);
-    let _ = tx.send(final_event);
+    tx.send(final_event)
+        .await
+        .expect("file egress receiver remains open");
     drop(tx);
 
     // The task should complete without panicking
@@ -379,16 +378,15 @@ async fn write_events_handles_broadcast_lag() {
     assert!(result.is_ok(), "write_events task should not panic on lag");
     assert!(result.unwrap().is_ok(), "write_events task should complete");
 
-    // Verify at least one event was written to the output file
+    // Verify every queued event was written in order.
     let content = tokio::fs::read_to_string(&path_s).await.unwrap_or_default();
-    assert!(
-        !content.is_empty(),
-        "at least one event should have been written despite lag"
-    );
-    // Verify the content is valid JSONL
-    for line in content.lines() {
-        let _v: serde_json::Value = serde_json::from_str(line).expect("each line is valid JSON");
-    }
+    let events: Vec<DepositEvent> = content
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("each line is valid JSON"))
+        .collect();
+    assert_eq!(events.len(), 6);
+    assert_eq!(events[0].data.tx_id, "0xlagged_0");
+    assert_eq!(events[5].data.tx_id, "0xlagged_final");
 }
 
 // ── format edge cases ────────────────────────────────────────────────────

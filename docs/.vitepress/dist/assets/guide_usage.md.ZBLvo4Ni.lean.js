@@ -1,1 +1,0 @@
-import{$ as e,A as t,B as n,V as r}from"./chunks/framework.D33c0DAH.js";var i=JSON.parse(`{"title":"Usage","description":"","frontmatter":{},"headers":[],"relativePath":"guide/usage.md","filePath":"guide/usage.md"}`),a={name:`guide/usage.md`};function o(t,i,a,o,s,c){return e(),n(`div`,null,[...i[0]||=[r("",7)]])}var s=t(a,[[`render`,o]]);export{i as __pageData,s as default};

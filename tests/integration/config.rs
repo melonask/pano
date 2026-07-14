@@ -13,6 +13,75 @@ fn write_temp_toml(content: impl AsRef<str>) -> NamedTempFile {
     f
 }
 
+#[cfg(feature = "postgres")]
+struct EnvironmentGuard {
+    previous_values: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+#[cfg(feature = "postgres")]
+impl EnvironmentGuard {
+    fn set(values: &[(&'static str, &'static str)]) -> Self {
+        let previous_values = values
+            .iter()
+            .map(|(name, value)| {
+                let previous = env::var_os(name);
+                // SAFETY: this helper is only used by tests serialized on the `env` lock.
+                unsafe { env::set_var(name, value) };
+                (*name, previous)
+            })
+            .collect();
+        Self { previous_values }
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl Drop for EnvironmentGuard {
+    fn drop(&mut self) {
+        for (name, previous) in &self.previous_values {
+            // SAFETY: this helper is only used by tests serialized on the `env` lock.
+            unsafe {
+                if let Some(value) = previous {
+                    env::set_var(name, value);
+                } else {
+                    env::remove_var(name);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "postgres")]
+#[test]
+#[serial(env)]
+fn checked_in_e2e_configs_load_without_network_access() {
+    let _environment = EnvironmentGuard::set(&[
+        ("SOLANA_GENESIS_HASH", "solana:localnet"),
+        ("SOLANA_RPC_URL", "http://127.0.0.1:8899"),
+        ("BTC_RPC_URL", "http://127.0.0.1:18443"),
+        (
+            "USDT_CONTRACT",
+            "0x0000000000000000000000000000000000000001",
+        ),
+        ("USDC_MINT", "11111111111111111111111111111111"),
+        ("POLYGON_RPC_URL", "https://127.0.0.1:8545"),
+        ("SEPOLIA_RPC_URL", "https://127.0.0.1:8546"),
+        ("SOLANA_DEVNET_RPC_URL", "https://127.0.0.1:8899"),
+    ]);
+
+    for path in [
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/e2e/Config.pano.local.toml"
+        ),
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/e2e/Config.pano.live.toml"
+        ),
+    ] {
+        AppConfig::load(path).unwrap_or_else(|error| panic!("{path} must load: {error:#}"));
+    }
+}
+
 /// Minimal valid universal config with one chain and asset.
 const MINIMAL_PANO_CONFIG: &str = r#"
 [pano]
@@ -56,6 +125,84 @@ fn config_load_happy_path() {
     assert_eq!(cfg.chains[0].start_block, None);
     assert_eq!(cfg.chains[0].end_block, None);
     assert_eq!(cfg.chains[0].assets.len(), 1);
+}
+
+#[test]
+#[serial(env)]
+fn config_propagates_shared_scan_bounds_and_token_programs() {
+    unsafe {
+        env::set_var("PANO_TEST_START_BLOCK", "123456");
+        env::set_var("PANO_TEST_END_BLOCK", "123999");
+    }
+    let toml = r#"
+[pano]
+chains = ["solana"]
+assets = ["classic", "token_2022"]
+
+[pano.ingress.file]
+enabled = false
+
+[pano.egress.file]
+enabled = false
+
+[chains.solana]
+caip2 = "solana:test"
+rpc_urls = ["http://127.0.0.1:8899"]
+confirmations = 1
+start_block = ${PANO_TEST_START_BLOCK}
+end_block = ${PANO_TEST_END_BLOCK}
+
+[assets.classic]
+chain = "solana"
+symbol = "CLASSIC"
+token_program = "classic-token-program"
+decimals = 6
+
+[assets.token_2022]
+chain = "solana"
+symbol = "TOKEN2022"
+token_program = "token-2022-program"
+decimals = 9
+"#;
+    let f = write_temp_toml(toml);
+    let cfg = AppConfig::load(f.path().to_str().unwrap()).unwrap();
+    unsafe {
+        env::remove_var("PANO_TEST_START_BLOCK");
+        env::remove_var("PANO_TEST_END_BLOCK");
+    }
+
+    let chain = &cfg.chains[0];
+    assert_eq!(chain.start_block, Some(123_456));
+    assert_eq!(chain.end_block, Some(123_999));
+    assert_eq!(
+        chain.assets[0].token_program.as_deref(),
+        Some("classic-token-program")
+    );
+    assert_eq!(
+        chain.assets[1].token_program.as_deref(),
+        Some("token-2022-program")
+    );
+}
+
+#[test]
+fn config_rejects_shared_start_block_after_end_block() {
+    let toml = MINIMAL_PANO_CONFIG.replacen(
+        "confirmations = 12",
+        "confirmations = 12\nstart_block = 2\nend_block = 1",
+        1,
+    );
+    let f = write_temp_toml(toml);
+    let err = AppConfig::load(f.path().to_str().unwrap()).unwrap_err();
+    assert!(format!("{err:#}").contains("start_block is greater than end_block"));
+}
+
+#[test]
+fn config_rejects_empty_shared_token_program() {
+    let toml =
+        MINIMAL_PANO_CONFIG.replacen("decimals = 18", "token_program = \"  \"\ndecimals = 18", 1);
+    let f = write_temp_toml(toml);
+    let err = AppConfig::load(f.path().to_str().unwrap()).unwrap_err();
+    assert!(format!("{err:#}").contains("empty token_program"));
 }
 
 #[test]

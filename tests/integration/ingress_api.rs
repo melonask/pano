@@ -85,12 +85,12 @@ fn test_config_with_api_key() -> AppConfig {
 /// Returns the handle and the receiver for draining/verifying commands.
 fn test_handle(config: AppConfig) -> (DetectorHandle, mpsc::Receiver<Command>) {
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(256);
-    let (events_tx, _) = tokio::sync::broadcast::channel::<pano::model::DepositEvent>(16);
+    let (stream_tx, _) = tokio::sync::broadcast::channel::<pano::model::DepositEvent>(16);
     let watched = Arc::new(RwLock::new(hashbrown::HashMap::new()));
     let (address_change_tx, _) = tokio::sync::watch::channel(());
     let handle = DetectorHandle {
         cmd_tx,
-        events_tx,
+        stream_tx,
         watched,
         config: Arc::new(config),
         address_change_tx,

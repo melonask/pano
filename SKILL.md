@@ -99,11 +99,12 @@ detected event is observation, not final settlement.
   native asset in satoshis. `log_index` is the output (`vout`) index. Sender is
   taken from the first input when available.
 - **Solana:** detects native SOL and SPL-token activity for watched targets.
-  `solana_scan_mode = "blocks"` scans full confirmed blocks; `"signatures"`
-  follows address signatures and can fall back to a block rescan when a pruned
-  cursor is encountered. Failed transactions, unavailable blocks, and skipped
-  slots do not become deposit events. The account index distinguishes activity
-  within a transaction. A token program may be specified for an SPL asset.
+  `solana_scan_mode = "blocks"` issues one `getBlock` per slot and is capped
+  to `batch_size` slots per cycle; `"signatures"` follows address signatures,
+  uses `batch_size` only as its page limit, and can fall back to a block rescan
+  when a pruned cursor is encountered. Failed transactions, unavailable blocks,
+  and skipped slots do not become deposit events. The account index distinguishes
+  activity within a transaction. A token program may be specified for an SPL asset.
 
 All emitted amounts are positive, base-unit digit strings with no decimal
 point. Transaction IDs are hex for EVM/Bitcoin and base58 for Solana. Preserve

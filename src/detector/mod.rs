@@ -26,7 +26,8 @@ type SharedWatched = Arc<RwLock<WatchedMap>>;
 #[derive(Debug, Clone)]
 pub struct DetectorHandle {
     pub cmd_tx: mpsc::Sender<Command>,
-    pub events_tx: broadcast::Sender<DepositEvent>,
+    /// Best-effort bounded stream for SSE/WebSocket clients.
+    pub stream_tx: broadcast::Sender<DepositEvent>,
     /// Keyed by the symmetric triad: (address, caip2, symbol).
     pub watched: SharedWatched,
     pub config: Arc<AppConfig>,
@@ -43,14 +44,14 @@ pub fn start_with_tasks(
         mpsc::channel::<Command>(config.detector.command_queue_capacity.max(1));
     let (delivery_tx, delivery_rx) =
         mpsc::channel::<DepositEvent>(config.detector.delivery_queue_capacity.max(1));
-    let events_tx = egress.event_tx.clone();
+    let stream_tx = egress.stream_sender();
     let watched: SharedWatched = Arc::new(RwLock::new(hashbrown::HashMap::new()));
     let config = Arc::new(config);
     let (address_change_tx, _) = tokio::sync::watch::channel(());
 
     let handle = DetectorHandle {
         cmd_tx: cmd_tx.clone(),
-        events_tx: events_tx.clone(),
+        stream_tx,
         watched: watched.clone(),
         config: config.clone(),
         address_change_tx: address_change_tx.clone(),
@@ -397,7 +398,14 @@ pub fn start_with_tasks(
                                         ) {
                                             continue;
                                         }
-                                        let _ = events_tx.send(event.clone());
+                                        if let Err(error) = egress.publish_event(event.clone()).await {
+                                            tracing::error!(
+                                                %error,
+                                                event_id = %event.event_id,
+                                                closed_sinks = ?error.closed_sinks,
+                                                "persistent egress sink closed; event delivery requires reconciliation"
+                                            );
+                                        }
                                         if event.data.internal_egress.is_some() {
                                             enqueue_delivery(&delivery_tx, event);
                                         }
@@ -442,7 +450,14 @@ pub fn start_with_tasks(
                                         dedup_window_size,
                                         confirmed_key,
                                     ) {
-                                        let _ = events_tx.send(confirmed.clone());
+                                        if let Err(error) = egress.publish_event(confirmed.clone()).await {
+                                            tracing::error!(
+                                                %error,
+                                                event_id = %confirmed.event_id,
+                                                closed_sinks = ?error.closed_sinks,
+                                                "persistent egress sink closed; event delivery requires reconciliation"
+                                            );
+                                        }
                                         if confirmed.data.internal_egress.is_some() {
                                             enqueue_delivery(&delivery_tx, &confirmed);
                                         }

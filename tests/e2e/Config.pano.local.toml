@@ -1,19 +1,16 @@
 version = 1
 
 [chains.anvil]
-family = "evm"
 caip2 = "eip155:31337"
 rpc_urls = ["http://host.docker.internal:8545"]
 confirmations = 1
 
 [chains.solana]
-family = "solana"
 caip2 = "${SOLANA_GENESIS_HASH}"
 rpc_urls = ["${SOLANA_RPC_URL}"]
 confirmations = 1
 
 [chains.bitcoin]
-family = "bitcoin"
 caip2 = "bip122:0f9188f13cb7b2c71f2a335e3a4fc328"
 rpc_urls = ["${BTC_RPC_URL}"]
 confirmations = 1

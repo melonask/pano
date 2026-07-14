@@ -42,14 +42,14 @@ mod imp {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     use std::time::Duration;
-    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
 
     type HmacSha256 = Hmac<Sha256>;
 
     /// Deliver deposit events via HTTP webhook (POST with JSON body and HMAC-SHA256 signature).
     pub async fn deliver(
         config: WebhookEgressConfig,
-        rx: &mut broadcast::Receiver<DepositEvent>,
+        mut rx: mpsc::Receiver<DepositEvent>,
     ) -> Result<()> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs.max(1)))
@@ -57,7 +57,7 @@ mod imp {
         let secret = config.secret.clone();
 
         loop {
-            let Some(event) = super::super::recv_event(rx).await else {
+            let Some(event) = rx.recv().await else {
                 break;
             };
 
@@ -165,7 +165,7 @@ pub use imp::*;
 #[cfg(not(feature = "webhook"))]
 pub async fn deliver(
     _config: WebhookEgressConfig,
-    _rx: &mut tokio::sync::broadcast::Receiver<crate::model::DepositEvent>,
+    _rx: tokio::sync::mpsc::Receiver<crate::model::DepositEvent>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("webhook egress requires feature \"webhook\" (rebuild with --features webhook)");
 }

@@ -63,8 +63,12 @@ pub async fn run(config: AppConfig) -> Result<()> {
             tracing::warn!(%error, "failed while waiting for shutdown signal");
         }
         tracing::info!("initiating graceful shutdown");
-        let _ = cmd_tx.send(crate::model::Command::Shutdown).await;
-        let _ = shutdown_tx.send(()).await;
+        if let Err(error) = cmd_tx.try_send(crate::model::Command::Shutdown) {
+            tracing::warn!(%error, "detector shutdown command could not be queued");
+        }
+        if shutdown_tx.send(()).await.is_err() {
+            tracing::debug!("runtime shutdown receiver already closed");
+        }
     });
 
     if config.server.dashboard_export && !config.server.dashboard.trim().is_empty() {

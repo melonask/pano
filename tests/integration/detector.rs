@@ -5,11 +5,11 @@ use super::common::{EVM_ADDR, EVM_ADDR_LOWER, EVM_SENDER, sample_data};
 use mockito::{Matcher, Server};
 use pano::config::{
     AppConfig, AssetConfig, ChainConfig, DetectorConfig, EgressConfig, IngressConfig,
-    OverrideConfig, RpcOptions, ServerConfig,
+    OverrideConfig, RpcOptions, ServerConfig, SolanaScanMode,
 };
 use pano::detector::remember_event_key;
-use pano::detector::util::deposit_event_key;
-use pano::egress::EgressHandle;
+use pano::detector::util::{deposit_event_key, effective_scan_to_block};
+use pano::egress::{EgressHandle, PersistentSinkSender};
 use pano::ingress::IngressHandle;
 use pano::model::{Command, DepositData, DepositEvent, DepositStatus, WatchSpec};
 use serde_json::json;
@@ -80,6 +80,28 @@ fn eth_chain(rpc_url: String) -> ChainConfig {
             min_amount: None,
         }],
     }
+}
+
+#[test]
+fn solana_scan_range_uses_batch_size_only_for_block_mode() {
+    let mut chain = ChainConfig {
+        caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".to_string(),
+        start_block: None,
+        end_block: None,
+        confirmed_blocks: 32,
+        rpc: vec!["http://localhost".to_string()],
+        rpc_options: Some(RpcOptions {
+            batch_size: 20,
+            solana_scan_mode: SolanaScanMode::Signatures,
+            ..RpcOptions::default()
+        }),
+        assets: Vec::new(),
+    };
+
+    assert_eq!(effective_scan_to_block(&chain, 100, 1_040, 500), 1_040);
+
+    chain.rpc_options.as_mut().unwrap().solana_scan_mode = SolanaScanMode::Blocks;
+    assert_eq!(effective_scan_to_block(&chain, 100, 1_040, 500), 119);
 }
 
 /// Mock for eth_blockNumber → tip.
@@ -188,13 +210,69 @@ fn start_detector(
         command_rx: ingress_rx,
     };
     let (events_tx, _) = broadcast::channel::<DepositEvent>(4096);
-    let egress = EgressHandle {
-        event_tx: events_tx.clone(),
-    };
+    let egress = EgressHandle::new(events_tx.clone(), vec![]);
     let (handle, task) =
         pano::detector::start_with_tasks(config, ingress, egress).expect("detector start");
     let events_rx = events_tx.subscribe();
     (handle, task, events_rx)
+}
+
+#[tokio::test]
+async fn persistent_sink_queue_applies_backpressure_without_loss_or_reordering() {
+    let (stream_tx, _) = broadcast::channel(1);
+    let (sink_tx, mut sink_rx) = mpsc::channel(2);
+    let egress = EgressHandle::new(
+        stream_tx,
+        vec![PersistentSinkSender::new("slow-test-sink", sink_tx)],
+    );
+    let event_count = 7;
+    let receiver = tokio::spawn(async move {
+        let mut received = Vec::new();
+        while let Some(event) = sink_rx.recv().await {
+            received.push(event.data.tx_id);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        received
+    });
+
+    for index in 0..event_count {
+        let event = DepositEvent::detected(DepositData {
+            tx_id: format!("0xtransport_{index}"),
+            ..sample_data()
+        })
+        .expect("valid transport test event");
+        egress
+            .publish_event(event)
+            .await
+            .expect("sink remains open");
+    }
+    drop(egress);
+
+    let received = tokio::time::timeout(Duration::from_secs(2), receiver)
+        .await
+        .expect("slow sink drains")
+        .expect("slow sink task succeeds");
+    let expected: Vec<_> = (0..event_count)
+        .map(|index| format!("0xtransport_{index}"))
+        .collect();
+    assert_eq!(received, expected);
+}
+
+#[tokio::test]
+async fn closed_persistent_sink_is_reported_to_publisher() {
+    let (stream_tx, _) = broadcast::channel(1);
+    let (sink_tx, sink_rx) = mpsc::channel(1);
+    drop(sink_rx);
+    let egress = EgressHandle::new(
+        stream_tx,
+        vec![PersistentSinkSender::new("closed-test-sink", sink_tx)],
+    );
+
+    let error = egress
+        .publish_event(DepositEvent::detected(sample_data()).expect("valid event"))
+        .await
+        .expect_err("closed persistent sink must be surfaced");
+    assert_eq!(error.closed_sinks, vec!["closed-test-sink"]);
 }
 
 // ── Full scan cycle — detect → emit → deliver ────────────────────────────

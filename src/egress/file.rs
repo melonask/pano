@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 
 // ── Per-path write serialization for JSON files ──────────────────────────
 
@@ -54,7 +54,7 @@ pub struct FileEgressConfig {
 }
 
 /// Write deposit events to a file. Format inferred from extension.
-pub async fn write_events(path: String, rx: &mut broadcast::Receiver<DepositEvent>) -> Result<()> {
+pub async fn write_events(path: String, mut rx: mpsc::Receiver<DepositEvent>) -> Result<()> {
     let locks = shared_write_locks();
     let format = infer_format(&path);
     let mut file = if format == FileFormat::Json {
@@ -70,7 +70,7 @@ pub async fn write_events(path: String, rx: &mut broadcast::Receiver<DepositEven
         )
     };
     loop {
-        let Some(event) = super::recv_event(rx).await else {
+        let Some(event) = rx.recv().await else {
             break;
         };
 

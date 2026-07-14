@@ -78,16 +78,16 @@ mod imp {
     use crate::model::DepositEvent;
     use crate::shared::db;
     use anyhow::{Context, Result};
-    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
 
     /// Write deposit events to a PostgreSQL database.
     pub async fn write_events(
         config: PgEgressConfig,
-        rx: &mut broadcast::Receiver<DepositEvent>,
+        mut rx: mpsc::Receiver<DepositEvent>,
     ) -> Result<()> {
         let pool = db::connect_pg(&config.url).await?;
         ensure_schema(&pool, &config.table).await?;
-        while let Some(ev) = super::super::recv_event(rx).await {
+        while let Some(ev) = rx.recv().await {
             if let Err(e) = insert_event(&pool, &ev, &config.table).await {
                 tracing::error!(error = %e, event_id = %ev.event_id, "failed to insert event into pg");
             }

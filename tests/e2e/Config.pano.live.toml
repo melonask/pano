@@ -1,19 +1,16 @@
 version = 1
 
 [chains.polygon]
-family = "evm"
 caip2 = "eip155:137"
 rpc_urls = ["${POLYGON_RPC_URL}"]
 confirmations = 6
 
 [chains.sepolia]
-family = "evm"
 caip2 = "eip155:11155111"
 rpc_urls = ["${SEPOLIA_RPC_URL}"]
 confirmations = 2
 
 [chains.solana_devnet]
-family = "solana"
 caip2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
 rpc_urls = ["${SOLANA_DEVNET_RPC_URL}"]
 confirmations = 1

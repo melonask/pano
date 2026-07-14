@@ -92,6 +92,10 @@ struct SharedChainConfig {
     caip2: String,
     rpc_urls: Vec<String>,
     confirmations: u32,
+    #[serde(default)]
+    start_block: Option<u64>,
+    #[serde(default)]
+    end_block: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,6 +107,8 @@ struct SharedAssetConfig {
     symbol: String,
     #[serde(default)]
     contract: Option<String>,
+    #[serde(default)]
+    token_program: Option<String>,
     #[serde(default)]
     decimals: u32,
 }
@@ -421,6 +427,8 @@ impl Default for PanoIngressConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PanoEgressConfig {
+    #[serde(default = "default_persistent_queue_capacity")]
+    persistent_queue_capacity: usize,
     #[serde(default)]
     file: PanoEgressFileConfig,
     #[serde(default)]
@@ -675,6 +683,8 @@ pub struct RpcOptions {
     pub max_concurrent: usize,
     #[serde(default)]
     pub delay_ms: u64,
+    /// Bitcoin blocks and Solana block scans per detector cycle; Solana
+    /// signature page size; and EVM ERC-20 request batch size.
     #[serde(default = "default_batch_size")]
     pub batch_size: u64,
     /// EVM only. Query multiple ERC-20 contract addresses in one eth_getLogs call.
@@ -706,8 +716,11 @@ pub struct RpcOptions {
     #[serde(default)]
     pub solana_max_supported_transaction_version: u64,
     /// Solana scan mode: "signatures" (per-address getSignaturesForAddress)
-    /// or "blocks" (per-slot getBlock). Block mode avoids dependency on
-    /// RPC signature indexing at the cost of higher bandwidth per cycle.
+    /// or "blocks" (per-slot getBlock). Signature mode scans the requested
+    /// slot range and uses batch_size only as the signature-page limit. Block
+    /// mode caps each cycle to batch_size slots to bound per-slot RPC load.
+    /// Block mode avoids dependency on RPC signature indexing at the cost of
+    /// higher bandwidth per cycle.
     /// Block mode is the default for Solana chains.
     #[serde(default = "default_solana_scan_mode")]
     pub solana_scan_mode: SolanaScanMode,
@@ -889,6 +902,9 @@ fn default_ingress_command_queue_capacity() -> usize {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EgressConfig {
+    /// Capacity of each lossless queue feeding a durable/external egress sink.
+    #[serde(default = "default_persistent_queue_capacity")]
+    pub persistent_queue_capacity: usize,
     #[serde(default)]
     pub file: FileEgressConfig,
     #[serde(default)]
@@ -908,6 +924,7 @@ pub struct EgressConfig {
 impl Default for EgressConfig {
     fn default() -> Self {
         Self {
+            persistent_queue_capacity: default_persistent_queue_capacity(),
             file: FileEgressConfig::default(),
             sqlite: SqliteEgressConfig::default(),
             pg: PgEgressConfig::default(),
@@ -920,6 +937,10 @@ impl Default for EgressConfig {
 }
 
 fn default_broadcast_capacity() -> usize {
+    4096
+}
+
+fn default_persistent_queue_capacity() -> usize {
     4096
 }
 
@@ -1302,6 +1323,17 @@ impl AppConfig {
             for asset in &chain.assets {
                 if asset.symbol.trim().is_empty() {
                     anyhow::bail!("chain {} has asset with empty symbol", chain.caip2);
+                }
+                if asset
+                    .token_program
+                    .as_ref()
+                    .is_some_and(|token_program| token_program.trim().is_empty())
+                {
+                    anyhow::bail!(
+                        "asset {} on {} has an empty token_program",
+                        asset.symbol,
+                        chain.caip2
+                    );
                 }
                 if asset.decimals > self.detector.max_decimals {
                     anyhow::bail!(
@@ -1773,7 +1805,7 @@ fn build_chains(universal: &UniversalConfig, pano: &PanoRootConfig) -> Result<Ve
                 chain_assets.push(AssetConfig {
                     symbol: shared_asset.symbol.clone(),
                     contract: shared_asset.contract.clone(),
-                    token_program: None,
+                    token_program: shared_asset.token_program.clone(),
                     decimals: shared_asset.decimals,
                     min_amount: None,
                 });
@@ -1788,8 +1820,8 @@ fn build_chains(universal: &UniversalConfig, pano: &PanoRootConfig) -> Result<Ve
 
         chains.push(ChainConfig {
             caip2: shared.caip2.clone(),
-            start_block: None,
-            end_block: None,
+            start_block: shared.start_block,
+            end_block: shared.end_block,
             confirmed_blocks: shared.confirmations,
             rpc: shared.rpc_urls.clone(),
             rpc_options: Some(rpc_options),
@@ -1995,6 +2027,7 @@ fn build_egress_config(universal: &UniversalConfig, pano: &PanoRootConfig) -> Re
     };
 
     Ok(EgressConfig {
+        persistent_queue_capacity: pe.persistent_queue_capacity.max(1),
         file: fe,
         sqlite: se,
         pg: pge,

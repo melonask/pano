@@ -40,9 +40,8 @@ mod imp {
     use crate::shared::amqp::build_amqp_url;
     use anyhow::Result;
     use lapin::{BasicProperties, Connection, ConnectionProperties, options::*};
-    use std::collections::VecDeque;
     use std::sync::Arc;
-    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
 
     #[derive(Debug, Clone)]
     pub(crate) struct QueueConnection {
@@ -108,20 +107,13 @@ mod imp {
     /// Routing key is dynamic: "detected" or "confirmed" based on event type.
     pub async fn publish(
         config: QueueEgressConfig,
-        rx: &mut broadcast::Receiver<DepositEvent>,
+        mut rx: mpsc::Receiver<DepositEvent>,
     ) -> Result<()> {
         let url = build_amqp_url(&config.url, &config.username, &config.password)?;
         let mut current_event = None;
-        let mut pending_events = VecDeque::new();
         let reconnect_delay = std::time::Duration::from_secs(config.reconnect_secs);
 
         loop {
-            if current_event.is_some() && drain_closed_receiver(rx, &mut pending_events) {
-                tracing::warn!(
-                    "queue egress shutting down with an unpublished event after broadcast closed"
-                );
-                return Ok(());
-            }
             tracing::info!(%url, exchange = %config.exchange, "queue egress connecting");
             let conn = match Connection::connect(&url, ConnectionProperties::default()).await {
                 Ok(conn) => conn,
@@ -157,11 +149,13 @@ mod imp {
             }
 
             loop {
-                let event =
-                    match next_event_or_retry(rx, &mut current_event, &mut pending_events).await {
+                let event = match current_event.take() {
+                    Some(event) => event,
+                    None => match rx.recv().await {
                         Some(event) => event,
                         None => return Ok(()),
-                    };
+                    },
+                };
 
                 let payload = match serde_json::to_string(&event) {
                     Ok(payload) => payload,
@@ -205,37 +199,6 @@ mod imp {
             tokio::time::sleep(reconnect_delay).await;
         }
     }
-
-    async fn next_event_or_retry(
-        rx: &mut broadcast::Receiver<DepositEvent>,
-        current_event: &mut Option<DepositEvent>,
-        pending_events: &mut VecDeque<DepositEvent>,
-    ) -> Option<DepositEvent> {
-        if let Some(event) = current_event.take() {
-            return Some(event);
-        }
-        if let Some(event) = pending_events.pop_front() {
-            return Some(event);
-        }
-
-        super::super::recv_event(rx).await
-    }
-
-    fn drain_closed_receiver(
-        rx: &mut broadcast::Receiver<DepositEvent>,
-        pending_events: &mut VecDeque<DepositEvent>,
-    ) -> bool {
-        loop {
-            match rx.try_recv() {
-                Ok(event) => pending_events.push_back(event),
-                Err(broadcast::error::TryRecvError::Lagged(missed)) => {
-                    tracing::warn!(missed, "broadcast receiver lagging, skipping missed events");
-                }
-                Err(broadcast::error::TryRecvError::Empty) => return false,
-                Err(broadcast::error::TryRecvError::Closed) => return true,
-            }
-        }
-    }
 }
 
 #[cfg(feature = "amqp")]
@@ -246,7 +209,7 @@ pub use imp::publish;
 #[cfg(not(feature = "amqp"))]
 pub async fn publish(
     _config: QueueEgressConfig,
-    _rx: &mut tokio::sync::broadcast::Receiver<crate::model::DepositEvent>,
+    _rx: tokio::sync::mpsc::Receiver<crate::model::DepositEvent>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("AMQP egress requires feature \"amqp\" (rebuild with --features amqp)");
 }
